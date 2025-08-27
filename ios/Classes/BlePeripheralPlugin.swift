@@ -135,7 +135,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
 
         rxCharacteristic = CBMutableCharacteristic(
             type: rxUUID,
-            properties: [.writeWithoutResponse],
+            properties: [.write],
             value: nil,
             permissions: [.writeable]
         )
