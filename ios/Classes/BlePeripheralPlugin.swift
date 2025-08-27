@@ -96,6 +96,15 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
                   let value = args["value"] as? FlutterStandardTypedData else { return }
             writeCharacteristic(charUuid: charUuid, value: value.data)
             result(nil)
+        case "requestMtu":
+            if let args = call.arguments as? [String: Any],
+               let deviceId = args["deviceId"] as? String,
+               let peripheral = connectedPeripherals.first(where: { $0.identifier.uuidString == deviceId }) {
+                let mtu = peripheral.maximumWriteValueLength(for: .withResponse)
+                result(mtu)
+            } else {
+                result(185) // default safe MTU for iOS
+            }
 
         default:
             result(FlutterMethodNotImplemented)
@@ -126,7 +135,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
 
         rxCharacteristic = CBMutableCharacteristic(
             type: rxUUID,
-            properties: [.write],
+            properties: [.writeWithoutResponse],
             value: nil,
             permissions: [.writeable]
         )
