@@ -27,6 +27,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     // Pending actions
     private var pendingPeripheralSetup: (service: String, tx: String, rx: String)?
     private var pendingScanUUID: CBUUID?
+    private var loggingEnabled = true
 
     // Flutter Plugin registration
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -298,7 +299,6 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let value = characteristic.value else { return }
         sendEvent(["type": "notification", "value": value, "deviceId": peripheral.identifier.uuidString])
     }
-    private var loggingEnabled = true
 
     private func log(_ message: String) {
         if loggingEnabled {
