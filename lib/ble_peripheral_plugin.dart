@@ -75,9 +75,4 @@ class BlePeripheralPlugin {
         .map((event) => Map<String, dynamic>.from(event));
     return _eventStream!;
   }
-
-  static Future<void> enableLogs(bool enable) async {
-    await _method.invokeMethod('enableLogs', {"enable": enable});
-  }
-
 }

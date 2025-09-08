@@ -105,12 +105,6 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
             } else {
                 result(185) // default safe MTU for iOS
             }
-        case "enableLogs":
-            if let args = call.arguments as? [String: Any],
-               let enable = args["enable"] as? Bool {
-                loggingEnabled = enable
-            }
-            result(nil)
 
         default:
             result(FlutterMethodNotImplemented)
@@ -298,12 +292,4 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let value = characteristic.value else { return }
         sendEvent(["type": "notification", "value": value, "deviceId": peripheral.identifier.uuidString])
     }
-    private var loggingEnabled = true
-
-    private func log(_ message: String) {
-        if loggingEnabled {
-            print("[BlePeripheralPlugin] \(message)")
-        }
-    }
-
 }
