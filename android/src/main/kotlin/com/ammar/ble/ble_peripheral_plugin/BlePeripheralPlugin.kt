@@ -73,14 +73,14 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         bluetoothAdapter = bluetoothManager?.adapter
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         scanner = bluetoothAdapter?.bluetoothLeScanner
-        logi("Plugin attached")
+        logI("Plugin attached")
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         stopAll()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
-        logi("Plugin detached")
+        logI("Plugin detached")
     }
 
     // EventChannel
@@ -245,13 +245,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private fun sendNotification(charUuidStr: String, value: ByteArray) {
         if (gattServer == null) {
-            logw("No gatt server to notify")
+            logW("No gatt server to notify")
             return
         }
         val charUuid = UUID.fromString(charUuidStr)
         val characteristic = txCharacteristic
         if (characteristic == null || characteristic.uuid != charUuid) {
-            logw("TX characteristic mismatch or missing")
+            logW("TX characteristic mismatch or missing")
             return
         }
 
@@ -262,7 +262,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 try {
                     gattServer?.notifyCharacteristicChanged(dev, characteristic, false)
                 } catch (t: Throwable) {
-                    logw("Failed notify to ${dev.address}: ${t.message}")
+                    logW("Failed notify to ${dev.address}: ${t.message}")
                 }
             }
         }
@@ -271,7 +271,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     // GATT Server callback (peripheral)
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            logi("Server connection state change: ${device.address} -> $newState")
+            logI("Server connection state change: ${device.address} -> $newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(
                     mapOf(
@@ -295,7 +295,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             offset: Int,
             value: ByteArray
         ) {
-            logi("Write request on server char ${characteristic.uuid} from ${device.address}")
+            logI("Write request on server char ${characteristic.uuid} from ${device.address}")
             // send to Flutter as rx
             sendEvent(
                 mapOf(
@@ -319,7 +319,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             offset: Int,
             value: ByteArray
         ) {
-            logi("Descriptor write on server: ${descriptor.uuid} from ${device.address}")
+            logI("Descriptor write on server: ${descriptor.uuid} from ${device.address}")
             if (descriptor.uuid == UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")) {
                 val enable = value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                 if (enable) {
@@ -339,7 +339,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             super.onMtuChanged(device, mtu)
-            logi("Server MTU changed: ${device.address} -> $mtu")
+            logI("Server MTU changed: ${device.address} -> $mtu")
             setMtu(device, mtu)
         }
     }
@@ -347,7 +347,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     // Add this method to handle MTU changes in peripheral mode
     private fun setMtu(device: BluetoothDevice, mtu: Int) {
         // For peripheral mode, we need to handle MTU in the server callback
-        logi("MTU changed for ${device.address}: $mtu")
+        logI("MTU changed for ${device.address}: $mtu")
         sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
     }
 
@@ -357,24 +357,24 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         try {
             if (gattClient != null) {
                 gattClient?.requestMtu(mtu)
-                logi("Requesting MTU: $mtu")
+                logI("Requesting MTU: $mtu")
             } else {
-                logw("Cannot request MTU - GATT client not connected")
+                logW("Cannot request MTU - GATT client not connected")
             }
         } catch (t: Throwable) {
-            loge("requestMtu error: ${t.message}")
+            logE("requestMtu error: ${t.message}")
         }
     }
 
     // Advertise callback
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            logi("Advertising started")
+            logI("Advertising started")
             sendEvent(mapOf("type" to "advertising_started"))
         }
 
         override fun onStartFailure(errorCode: Int) {
-            loge("Advertising failed: $errorCode")
+            logE("Advertising failed: $errorCode")
             sendEvent(mapOf("type" to "advertising_failed", "code" to errorCode))
         }
     }
@@ -394,7 +394,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             scanner?.startScan(listOf(filter), settings, scanCallback)
             sendEvent(mapOf("type" to "scan_started"))
         } catch (t: Throwable) {
-            loge("startScan error: ${t.message}")
+            logE("startScan error: ${t.message}")
             sendEvent(mapOf("type" to "scan_error", "message" to t.message))
         }
     }
@@ -404,14 +404,14 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             scanner?.stopScan(scanCallback)
             sendEvent(mapOf("type" to "scan_stopped"))
         } catch (t: Throwable) {
-            logw("stopScan error: ${t.message}")
+            logW("stopScan error: ${t.message}")
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val dev = result.device
-            logi("Scan result: ${dev.address} name=${dev.name ?: ""}")
+            logI("Scan result: ${dev.address} name=${dev.name ?: ""}")
             sendEvent(
                 mapOf(
                     "type" to "scanResult",
@@ -422,7 +422,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         override fun onScanFailed(errorCode: Int) {
-            loge("Scan failed: $errorCode")
+            logE("Scan failed: $errorCode")
             sendEvent(mapOf("type" to "scan_failed", "code" to errorCode))
         }
     }
@@ -436,7 +436,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             // autoConnect = false
             gattClient = device.connectGatt(appContext, false, gattClientCallback)
         } catch (t: Throwable) {
-            loge("connect error: ${t.message}")
+            logE("connect error: ${t.message}")
             sendEvent(mapOf("type" to "connect_error", "message" to t.message))
         }
     }
@@ -446,7 +446,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             gattClient?.disconnect()
             gattClient?.close()
         } catch (t: Throwable) {
-            logw("disconnect error: ${t.message}")
+            logW("disconnect error: ${t.message}")
         } finally {
             gattClient = null
             connectedDevice = null
@@ -456,7 +456,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private val gattClientCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            logi("Client connection state: $newState")
+            logI("Client connection state: $newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(mapOf("type" to "connected", "deviceId" to (gatt.device?.address ?: "")))
                 // discover services
@@ -472,7 +472,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            logi("Services discovered")
+            logI("Services discovered")
             // subscribe to notified characteristic if matches serverTxUuid
             try {
                 // find characteristic in discovered services
@@ -489,13 +489,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                                 c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                             desc?.let { gatt.writeDescriptor(it) }
-                            logi("Subscribed to ${c.uuid}")
+                            logI("Subscribed to ${c.uuid}")
                         }
                     }
                 }
                 gattClient = gatt
             } catch (t: Throwable) {
-                logw("Service discover error: ${t.message}")
+                logW("Service discover error: ${t.message}")
             }
         }
 
@@ -503,7 +503,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            logi("Characteristic changed: ${characteristic.uuid}")
+            logI("Characteristic changed: ${characteristic.uuid}")
             sendEvent(
                 mapOf(
                     "type" to "notification",
@@ -518,7 +518,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            logi("Characteristic write result: ${characteristic.uuid} status=$status")
+            logI("Characteristic write result: ${characteristic.uuid} status=$status")
             sendEvent(
                 mapOf(
                     "type" to "write_result",
@@ -533,7 +533,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             super.onMtuChanged(gatt, mtu, status)
-            logi("Client MTU changed: $mtu, status: $status")
+            logI("Client MTU changed: $mtu, status: $status")
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 sendEvent(
                     mapOf(
@@ -562,7 +562,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 gattClient?.services?.firstOrNull { svc -> svc.getCharacteristic(charUuid) != null }
                     ?.getCharacteristic(charUuid)
             if (target == null) {
-                logw("Target characteristic not found to write: $charUuidStr")
+                logW("Target characteristic not found to write: $charUuidStr")
                 sendEvent(mapOf("type" to "write_error", "message" to "Characteristic not found"))
                 return
             }
@@ -570,7 +570,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             gattClient?.writeCharacteristic(target)
         } catch (t: Throwable) {
-            loge("writeCharacteristic error: ${t.message}")
+            logE("writeCharacteristic error: ${t.message}")
             sendEvent(mapOf("type" to "write_error", "message" to t.message))
         }
     }
@@ -583,7 +583,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     try {
                         eventSink?.success(payload)
                     } catch (t: Throwable) {
-                        logw("sendEvent error: ${t.message}")
+                        logW("sendEvent error: ${t.message}")
                     }
                 }
             } else {
@@ -592,7 +592,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     try {
                         eventSink?.success(payload)
                     } catch (t: Throwable) {
-                        logw("sendEvent error: ${t.message}")
+                        logW("sendEvent error: ${t.message}")
                     }
                 }
             }
