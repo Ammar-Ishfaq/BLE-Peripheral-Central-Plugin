@@ -28,6 +28,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     private var pendingPeripheralSetup: (service: String, tx: String, rx: String)?
     private var pendingScanUUID: CBUUID?
     private var loggingEnabled = true
+    var centralManager: CBCentralManager?
 
     // Flutter Plugin registration
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -36,6 +37,8 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         instance.eventChannel = FlutterEventChannel(name: "ble_peripheral_plugin/events", binaryMessenger: registrar.messenger())
         registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
         instance.eventChannel.setStreamHandler(instance)
+        instance.centralManager = CBCentralManager(delegate: instance, queue: nil, options: nil)
+
     }
 
     // MARK: - Stream Handler
@@ -52,6 +55,19 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     // MARK: - Method Call
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "isBluetoothOn":
+              if let manager = centralManager {
+                let state = manager.state
+                switch state {
+                case .poweredOn:
+                  result(true)
+                default:
+                  result(false)
+                }
+              } else {
+                // If centralManager is nil (shouldn't happen after init), return false
+                result(false)
+              }
         case "startPeripheral":
             guard let args = call.arguments as? [String: String],
                   let service = args["serviceUuid"],

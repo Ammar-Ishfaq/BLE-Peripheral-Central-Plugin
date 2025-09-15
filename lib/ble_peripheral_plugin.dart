@@ -11,6 +11,11 @@ class BlePeripheralPlugin {
   static Stream<Map<String, dynamic>>? _eventStream;
   static const int MAX_MTU = 512;
 
+  /// Checks whether Bluetooth is enabled on the device
+  static Future<bool> isBluetoothOn() async {
+    final bool isOn = await _channel.invokeMethod('isBluetoothOn');
+    return isOn;
+  }
   /// Request MTU size (Central → Peripheral)
   static Future<void> requestMtu([int mtu = MAX_MTU]) async {
     await _method.invokeMethod('requestMtu', {

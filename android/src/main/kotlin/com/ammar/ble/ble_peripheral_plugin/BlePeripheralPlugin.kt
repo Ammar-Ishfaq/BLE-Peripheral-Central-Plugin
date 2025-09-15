@@ -96,6 +96,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
+                "isBluetoothOn" -> {
+                    val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+                    val enabled = bluetoothAdapter?.isEnabled == true
+                    result.success(enabled)
+                }
                 "startPeripheral" -> {
                     val serviceUuid = call.argument<String>("serviceUuid")!!
                     val txUuid = call.argument<String>("txUuid")!!
