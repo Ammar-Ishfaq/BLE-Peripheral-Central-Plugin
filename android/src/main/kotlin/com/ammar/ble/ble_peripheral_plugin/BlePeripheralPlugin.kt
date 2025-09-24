@@ -156,7 +156,10 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     loggingEnabled = enable
                     result.success(null)
                 }
-
+                "isBluetoothOn" -> {
+                    val isOn = bluetoothAdapter?.isEnabled ?: false
+                    result.success(isOn)
+                }
                 else -> result.notImplemented()
             }
         } catch (t: Throwable) {
