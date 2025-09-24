@@ -28,7 +28,9 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     private var pendingPeripheralSetup: (service: String, tx: String, rx: String)?
     private var pendingScanUUID: CBUUID?
     private var loggingEnabled = true
-    var centralManager: CBCentralManager?
+
+    // Bluetooth state monitoring
+    private var isMonitoringBluetoothState = false
 
     // Flutter Plugin registration
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -37,8 +39,9 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         instance.eventChannel = FlutterEventChannel(name: "ble_peripheral_plugin/events", binaryMessenger: registrar.messenger())
         registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
         instance.eventChannel.setStreamHandler(instance)
-        instance.centralManager = CBCentralManager(delegate: instance, queue: nil, options: nil)
 
+        // Initialize central manager for Bluetooth state monitoring
+        instance.centralManager = CBCentralManager(delegate: instance, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: false])
     }
 
     // MARK: - Stream Handler
@@ -56,18 +59,16 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "isBluetoothOn":
-              if let manager = centralManager {
-                let state = manager.state
-                switch state {
-                case .poweredOn:
-                  result(true)
-                default:
-                  result(false)
-                }
-              } else {
-                // If centralManager is nil (shouldn't happen after init), return false
-                result(false)
-              }
+            result(isBluetoothPoweredOn())
+
+        case "startBluetoothStateMonitoring":
+            startBluetoothStateMonitoring()
+            result(nil)
+
+        case "stopBluetoothStateMonitoring":
+            stopBluetoothStateMonitoring()
+            result(nil)
+
         case "startPeripheral":
             guard let args = call.arguments as? [String: String],
                   let service = args["serviceUuid"],
@@ -134,6 +135,49 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         }
     }
 
+    // MARK: - Bluetooth State Monitoring
+    private func isBluetoothPoweredOn() -> Bool {
+        return centralManager.state == .poweredOn
+    }
+
+    private func startBluetoothStateMonitoring() {
+        isMonitoringBluetoothState = true
+        // Send initial state
+        sendBluetoothStateEvent()
+        log("Started Bluetooth state monitoring")
+    }
+
+    private func stopBluetoothStateMonitoring() {
+        isMonitoringBluetoothState = false
+        log("Stopped Bluetooth state monitoring")
+    }
+
+    private func sendBluetoothStateEvent() {
+        let state = getBluetoothStateString()
+        sendEvent(["type": "bluetooth_state_changed", "isOn": isBluetoothPoweredOn(), "state": state])
+    }
+
+    private func getBluetoothStateString() -> String {
+        let state = centralManager.state
+
+        switch state {
+        case .poweredOn:
+            return "poweredOn"
+        case .poweredOff:
+            return "poweredOff"
+        case .resetting:
+            return "resetting"
+        case .unauthorized:
+            return "unauthorized"
+        case .unknown:
+            return "unknown"
+        case .unsupported:
+            return "unsupported"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
     // MARK: - Peripheral
     private func startPeripheral(service: String, tx: String, rx: String) {
         if peripheralManager?.state == .poweredOn {
@@ -187,12 +231,11 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     // MARK: - Central
     private func startScan(service: String) {
         let uuid = CBUUID(string: service)
-        if centralManager?.state == .poweredOn {
+        if centralManager.state == .poweredOn {
             centralManager.scanForPeripherals(withServices: [uuid], options: nil)
             sendEvent(["type": "scan_started"])
         } else {
             pendingScanUUID = uuid
-            centralManager = CBCentralManager(delegate: self, queue: nil)
         }
     }
 
@@ -227,11 +270,19 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
             self.eventSink?(payload)
         }
     }
+
+    private func log(_ message: String) {
+        if loggingEnabled {
+            print("[BlePeripheralPlugin] \(message)")
+        }
+    }
 }
 
 // MARK: - CBPeripheralManagerDelegate
 extension BlePeripheralPlugin: CBPeripheralManagerDelegate {
     public func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
+        log("Peripheral manager state changed: \(peripheral.state.rawValue)")
+
         if peripheral.state == .poweredOn, let pending = pendingPeripheralSetup {
             setupPeripheral(service: pending.service, tx: pending.tx, rx: pending.rx)
             pendingPeripheralSetup = nil
@@ -263,12 +314,30 @@ extension BlePeripheralPlugin: CBPeripheralManagerDelegate {
 // MARK: - CBCentralManagerDelegate & CBPeripheralDelegate
 extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn, let uuid = pendingScanUUID {
-            centralManager.scanForPeripherals(withServices: [uuid], options: nil)
-            sendEvent(["type": "scan_started"])
-            pendingScanUUID = nil
+        log("Bluetooth state changed: \(getBluetoothStateString())")
+
+        if isMonitoringBluetoothState {
+            sendBluetoothStateEvent()
+        }
+
+        // Handle pending operations based on new state
+        if central.state == .poweredOn {
+            if let uuid = pendingScanUUID {
+                centralManager.scanForPeripherals(withServices: [uuid], options: nil)
+                sendEvent(["type": "scan_started"])
+                pendingScanUUID = nil
+            }
         } else if central.state != .poweredOn {
-            sendEvent(["type": "scan_error", "message": "Bluetooth not powered on"])
+            if pendingScanUUID != nil {
+                sendEvent(["type": "scan_error", "message": "Bluetooth not powered on"])
+                pendingScanUUID = nil
+            }
+        }
+
+        // Handle peripheral manager state if it exists
+        if peripheralManager?.state == .poweredOn, let pending = pendingPeripheralSetup {
+            setupPeripheral(service: pending.service, tx: pending.tx, rx: pending.rx)
+            pendingPeripheralSetup = nil
         }
     }
 
@@ -315,11 +384,4 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let value = characteristic.value else { return }
         sendEvent(["type": "notification", "value": value, "deviceId": peripheral.identifier.uuidString])
     }
-
-    private func log(_ message: String) {
-        if loggingEnabled {
-            print("[BlePeripheralPlugin] \(message)")
-        }
-    }
-
 }

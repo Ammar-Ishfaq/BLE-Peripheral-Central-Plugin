@@ -3,7 +3,10 @@ package com.ammar.ble.ble_peripheral_plugin
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.NonNull
@@ -18,10 +21,8 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     companion object {
         private const val TAG = "BlePeripheralPlugin"
-        private const val MAX_MTU = 512 // Set your desired MTU size
+        private const val MAX_MTU = 512
         private var loggingEnabled = true
-
-
     }
 
     private fun logI(msg: String) {
@@ -61,6 +62,10 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private var gattClient: BluetoothGatt? = null
     private var connectedDevice: BluetoothDevice? = null
 
+    // Bluetooth state monitoring
+    private var isMonitoringBluetoothState = false
+    private var bluetoothStateReceiver: BroadcastReceiver? = null
+
     override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
         methodChannel = MethodChannel(binding.binaryMessenger, "ble_peripheral_plugin/methods")
@@ -73,11 +78,17 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         bluetoothAdapter = bluetoothManager?.adapter
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         scanner = bluetoothAdapter?.bluetoothLeScanner
+
+        setupBluetoothStateReceiver()
+        registerBluetoothStateReceiver() // <--- register immediately
+        sendBluetoothStateEvent()
         logI("Plugin attached")
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         stopAll()
+        stopBluetoothStateMonitoring()
+        unregisterBluetoothStateReceiver()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         logI("Plugin detached")
@@ -97,10 +108,19 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         try {
             when (call.method) {
                 "isBluetoothOn" -> {
-                    val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-                    val enabled = bluetoothAdapter?.isEnabled == true
-                    result.success(enabled)
+                    result.success(isBluetoothEnabled())
                 }
+
+                "startBluetoothStateMonitoring" -> {
+                    startBluetoothStateMonitoring()
+                    result.success(null)
+                }
+
+                "stopBluetoothStateMonitoring" -> {
+                    stopBluetoothStateMonitoring()
+                    result.success(null)
+                }
+
                 "startPeripheral" -> {
                     val serviceUuid = call.argument<String>("serviceUuid")!!
                     val txUuid = call.argument<String>("txUuid")!!
@@ -169,6 +189,104 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    // Bluetooth State Monitoring
+    private fun setupBluetoothStateReceiver() {
+        bluetoothStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                        val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                        handleBluetoothStateChange(state)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun registerBluetoothStateReceiver() {
+        appContext?.let { context ->
+            val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+            context.registerReceiver(bluetoothStateReceiver, filter)
+        }
+    }
+
+    private fun unregisterBluetoothStateReceiver() {
+        appContext?.let { context ->
+            try {
+                bluetoothStateReceiver?.let { context.unregisterReceiver(it) }
+            } catch (e: Exception) {
+                logW("Error unregistering Bluetooth receiver: ${e.message}")
+            }
+        }
+    }
+
+    private fun isBluetoothEnabled(): Boolean {
+        return bluetoothAdapter?.isEnabled == true
+    }
+
+    private fun startBluetoothStateMonitoring() {
+        if (!isMonitoringBluetoothState) {
+            isMonitoringBluetoothState = true
+            registerBluetoothStateReceiver()
+            // Send initial state
+            sendBluetoothStateEvent()
+            logI("Started Bluetooth state monitoring")
+        }
+    }
+
+    private fun stopBluetoothStateMonitoring() {
+        if (isMonitoringBluetoothState) {
+            isMonitoringBluetoothState = false
+            unregisterBluetoothStateReceiver()
+            logI("Stopped Bluetooth state monitoring")
+        }
+    }
+
+    private fun handleBluetoothStateChange(state: Int) {
+        logI("Bluetooth state changed: ${getBluetoothStateString(state)}")
+
+        if (isMonitoringBluetoothState) {
+            sendBluetoothStateEvent()
+        }
+
+        // Handle operations based on new state
+        when (state) {
+            BluetoothAdapter.STATE_OFF -> {
+                // Bluetooth turned off, stop all operations
+//                stopAll()
+                sendEvent(mapOf("type" to "bluetooth_turned_off"))
+            }
+            BluetoothAdapter.STATE_ON -> {
+                // Bluetooth turned on, can restart operations if needed
+                sendEvent(mapOf("type" to "bluetooth_turned_on"))
+            }
+        }
+    }
+
+    private fun sendBluetoothStateEvent() {
+        val isEnabled = isBluetoothEnabled()
+        val state = bluetoothAdapter?.state ?: BluetoothAdapter.STATE_OFF
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            sendEvent(
+                mapOf(
+                    "type" to "bluetooth_state_changed",
+                    "isOn" to isEnabled,
+                    "state" to getBluetoothStateString(state)
+                )
+            )
+        }, 200) // delay 200ms so status stabilizes
+    }
+
+    private fun getBluetoothStateString(state: Int): String {
+        return when (state) {
+            BluetoothAdapter.STATE_OFF -> "poweredOff"
+            BluetoothAdapter.STATE_ON -> "poweredOn"
+            BluetoothAdapter.STATE_TURNING_OFF -> "turningOff"
+            BluetoothAdapter.STATE_TURNING_ON -> "turningOn"
+            else -> "unknown"
+        }
+    }
+
     // ---------- Peripheral (GATT Server + Advertiser) ----------
 
     private fun startPeripheral(serviceUuidStr: String, txUuidStr: String, rxUuidStr: String) {
@@ -218,7 +336,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             .build()
 
         val dataBuilder = AdvertiseData.Builder()
-            .setIncludeDeviceName(false) // keep advertisement small to avoid ADVERTISE_FAILED_DATA_TOO_LARGE
+            .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(serverServiceUuid!!))
 
         val data = dataBuilder.build()
@@ -226,7 +344,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         advertiser?.startAdvertising(settings, data, advertiseCallback)
         sendEvent(mapOf("type" to "peripheral_started"))
         logI("Peripheral started: $serviceUuidStr")
-
     }
 
     private fun stopPeripheral() {
@@ -338,10 +455,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             }
         }
 
-        // Remove the problematic onMtuChanged method or fix its signature
-        // The correct signature for onMtuChanged in BluetoothGattServerCallback is:
-        // override fun onMtuChanged(device: BluetoothDevice, mtu: Int) { ... }
-
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             super.onMtuChanged(device, mtu)
             logI("Server MTU changed: ${device.address} -> $mtu")
@@ -349,14 +462,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-    // Add this method to handle MTU changes in peripheral mode
     private fun setMtu(device: BluetoothDevice, mtu: Int) {
-        // For peripheral mode, we need to handle MTU in the server callback
         logI("MTU changed for ${device.address}: $mtu")
         sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
     }
 
-    // Add this method to request MTU
     @SuppressLint("MissingPermission")
     private fun requestMtu(mtu: Int) {
         try {
@@ -438,7 +548,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         try {
             val device = bluetoothAdapter?.getRemoteDevice(deviceId) ?: return
             connectedDevice = device
-            // autoConnect = false
             gattClient = device.connectGatt(appContext, false, gattClientCallback)
         } catch (t: Throwable) {
             logE("connect error: ${t.message}")
@@ -464,7 +573,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             logI("Client connection state: $newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(mapOf("type" to "connected", "deviceId" to (gatt.device?.address ?: "")))
-                // discover services
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 sendEvent(
@@ -478,18 +586,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             logI("Services discovered")
-            // subscribe to notified characteristic if matches serverTxUuid
             try {
-                // find characteristic in discovered services
-                val targetCharUuid =
-                    serverTxUuid // if connecting to our own server this may be set; otherwise user should use known UUIDs
-                // subscribe to all characteristics that are notify-capable for demo
                 gatt.services.forEach { svc ->
                     svc.characteristics.forEach { c ->
                         if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
-                            // enable notification locally
                             gatt.setCharacteristicNotification(c, true)
-                            // write descriptor to enable on remote
                             val desc =
                                 c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -532,9 +633,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 )
             )
         }
-
-        // Remove the problematic onConnectionStateChange method with wrong signature
-        // The correct signature is already implemented above
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             super.onMtuChanged(gatt, mtu, status)
@@ -583,27 +681,15 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     // ---------- helpers ----------
     private fun sendEvent(payload: Map<String, Any?>) {
         appContext?.let {
-            if (it is android.app.Activity) {
-                it.runOnUiThread {
-                    try {
-                        eventSink?.success(payload)
-                    } catch (t: Throwable) {
-                        logW("sendEvent error: ${t.message}")
-                    }
-                }
-            } else {
-                // fallback: use a Handler if appContext is not Activity
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    try {
-                        eventSink?.success(payload)
-                    } catch (t: Throwable) {
-                        logW("sendEvent error: ${t.message}")
-                    }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    eventSink?.success(payload)
+                } catch (t: Throwable) {
+                    logW("sendEvent error: ${t.message}")
                 }
             }
         }
     }
-
 
     private fun stopAll() {
         stopScan()
