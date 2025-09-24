@@ -80,4 +80,10 @@ class BlePeripheralPlugin {
     await _method.invokeMethod('enableLogs', {"enable": enable});
   }
 
+  /// Check if Bluetooth is ON (iOS + Android)
+  static Future<bool> isBluetoothOn() async {
+    final result = await _method.invokeMethod<bool>('isBluetoothOn');
+    return result ?? false;
+  }
+
 }
