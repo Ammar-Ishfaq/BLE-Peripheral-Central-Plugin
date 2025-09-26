@@ -20,8 +20,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         private const val TAG = "BlePeripheralPlugin"
         private const val MAX_MTU = 512 // Set your desired MTU size
         private var loggingEnabled = true
-
-
     }
 
     private fun logI(msg: String) {
@@ -279,7 +277,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     // GATT Server callback (peripheral)
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            logI("Server connection state change: ${device.address} -> $newState")
+            logI("Server connection state change: ${device.address} -> $newState (status=$status)")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(
                     mapOf(
@@ -291,6 +289,15 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 sendEvent(mapOf("type" to "server_disconnected", "deviceId" to device.address))
                 synchronized(subscribers) { subscribers.remove(device) }
+            }
+
+            // If Android reports GATT_ERROR or other non-success status, forward it
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                if (status == 133) {
+                    handleTooManyGatt("server", device.address, "status_$status")
+                } else {
+                    sendEvent(mapOf("type" to "server_connection_status", "deviceId" to device.address, "status" to status))
+                }
             }
         }
 
@@ -340,10 +347,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
         }
-
-        // Remove the problematic onMtuChanged method or fix its signature
-        // The correct signature for onMtuChanged in BluetoothGattServerCallback is:
-        // override fun onMtuChanged(device: BluetoothDevice, mtu: Int) { ... }
 
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             super.onMtuChanged(device, mtu)
@@ -445,7 +448,17 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             gattClient = device.connectGatt(appContext, false, gattClientCallback)
         } catch (t: Throwable) {
             logE("connect error: ${t.message}")
-            sendEvent(mapOf("type" to "connect_error", "message" to t.message))
+
+            // detect known Android BLE client limit / GATT errors and forward
+            val msg = t.message ?: ""
+            if (msg.contains("Too many", true) || msg.contains("Gatt", true) || t is IllegalStateException) {
+                // proactively cleanup resources so Android can recover
+                logW("Detected potential Too many GATT interfaces error: ${t.message}")
+                stopAll()
+                sendEvent(mapOf("type" to "error", "message" to "too_many_gatt_interfaces", "detail" to msg))
+            } else {
+                sendEvent(mapOf("type" to "connect_error", "message" to t.message))
+            }
         }
     }
 
@@ -464,11 +477,15 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private val gattClientCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            logI("Client connection state: $newState")
+            logI("Client connection state: $newState (status=$status) for ${gatt.device?.address}")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(mapOf("type" to "connected", "deviceId" to (gatt.device?.address ?: "")))
                 // discover services
-                gatt.discoverServices()
+                try {
+                    gatt.discoverServices()
+                } catch (e: Throwable) {
+                    logW("discoverServices failed: ${e.message}")
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 sendEvent(
                     mapOf(
@@ -477,10 +494,23 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     )
                 )
             }
+
+            // Android often returns status 133 when internal GATT issues occur.
+            // Forward this so Flutter can react (stop/restart node).
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                if (status == 133) {
+                    logW("GATT status 133 received for ${gatt.device?.address}")
+                    // cleanup here so OS can free handles
+                    stopAll()
+                    sendEvent(mapOf("type" to "error", "message" to "too_many_gatt_interfaces", "deviceId" to (gatt.device?.address ?: ""), "status" to status))
+                } else {
+                    sendEvent(mapOf("type" to "client_connection_status", "deviceId" to (gatt.device?.address ?: ""), "status" to status))
+                }
+            }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            logI("Services discovered")
+            logI("Services discovered (status=$status) for ${gatt.device?.address}")
             // subscribe to notified characteristic if matches serverTxUuid
             try {
                 // find characteristic in discovered services
@@ -516,7 +546,8 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 mapOf(
                     "type" to "notification",
                     "charUuid" to characteristic.uuid.toString(),
-                    "value" to characteristic.value
+                    "value" to characteristic.value,
+                    "deviceId" to (gatt.device?.address ?: "")
                 )
             )
         }
@@ -531,13 +562,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 mapOf(
                     "type" to "write_result",
                     "charUuid" to characteristic.uuid.toString(),
-                    "status" to status
+                    "status" to status,
+                    "deviceId" to (gatt.device?.address ?: "")
                 )
             )
         }
-
-        // Remove the problematic onConnectionStateChange method with wrong signature
-        // The correct signature is already implemented above
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             super.onMtuChanged(gatt, mtu, status)
@@ -607,10 +636,17 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-
     private fun stopAll() {
         stopScan()
         disconnect()
         stopPeripheral()
+    }
+
+    private fun handleTooManyGatt(kind: String, deviceId: String?, detail: String?) {
+        logW("handleTooManyGatt detected ($kind) for $deviceId detail=$detail")
+        // proactively free resources so Android can recover
+        stopAll()
+        // notify Flutter layer - Flutter can decide to restart the node after a short delay
+        sendEvent(mapOf("type" to "error", "message" to "too_many_gatt_interfaces", "kind" to kind, "deviceId" to deviceId, "detail" to detail))
     }
 }
