@@ -160,6 +160,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     val isOn = bluetoothAdapter?.isEnabled ?: false
                     result.success(isOn)
                 }
+                "isBluetoothPeripheralSupported" -> {
+                    val supported = bluetoothAdapter?.isMultipleAdvertisementSupported ?: false
+                    result.success(supported)
+                }
+
                 else -> result.notImplemented()
             }
         } catch (t: Throwable) {
@@ -200,7 +205,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         rxCharacteristic = BluetoothGattCharacteristic(
             serverRxUuid,
-            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
 
@@ -570,7 +575,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 return
             }
             target.value = value
-            target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             gattClient?.writeCharacteristic(target)
         } catch (t: Throwable) {
             logE("writeCharacteristic error: ${t.message}")

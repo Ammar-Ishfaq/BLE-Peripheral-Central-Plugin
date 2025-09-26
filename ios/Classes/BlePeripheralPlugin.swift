@@ -181,7 +181,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
 
         rxCharacteristic = CBMutableCharacteristic(
             type: rxUUID!,
-            properties: [.write],
+            properties: [.writeWithoutResponse],
             value: nil,
             permissions: [.writeable]
         )
@@ -261,7 +261,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     private func writeCharacteristic(charUuid: String, value: Data) {
         for peripheral in connectedPeripherals {
             if let rx = peripheralRX, rx.uuid.uuidString.uppercased() == charUuid.uppercased() {
-                peripheral.writeValue(value, for: rx, type: .withResponse)
+                peripheral.writeValue(value, for: rx, type: .withoutResponse)
                 log("Writing to characteristic: \(charUuid)")
             }
         }

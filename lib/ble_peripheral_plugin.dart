@@ -59,8 +59,8 @@ class BlePeripheralPlugin {
   }
 
   /// Write to peripheral characteristic (Central → Peripheral)
-  static Future<void> writeCharacteristic(
-      String charUuid, Uint8List value) async {
+  static Future<void> writeCharacteristic(String charUuid,
+      Uint8List value) async {
     await _method.invokeMethod('writeCharacteristic', {
       'charUuid': charUuid,
       'value': value,
@@ -83,6 +83,13 @@ class BlePeripheralPlugin {
   /// Check if Bluetooth is ON (iOS + Android)
   static Future<bool> isBluetoothOn() async {
     final result = await _method.invokeMethod<bool>('isBluetoothOn');
+    return result ?? false;
+  }
+
+  /// Check if Bluetooth Peripheral Is supported on Android
+  static Future<bool> isBluetoothPeripheralSupported() async {
+    final result = await _method.invokeMethod<bool>(
+        'isBluetoothPeripheralSupported');
     return result ?? false;
   }
 
