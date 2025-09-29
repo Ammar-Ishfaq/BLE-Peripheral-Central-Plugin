@@ -156,10 +156,12 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     loggingEnabled = enable
                     result.success(null)
                 }
+
                 "isBluetoothOn" -> {
                     val isOn = bluetoothAdapter?.isEnabled ?: false
                     result.success(isOn)
                 }
+
                 else -> result.notImplemented()
             }
         } catch (t: Throwable) {
@@ -476,23 +478,32 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             logI("Services discovered")
-            // subscribe to notified characteristic if matches serverTxUuid
             try {
-                // find characteristic in discovered services
-                val targetCharUuid =
-                    serverTxUuid // if connecting to our own server this may be set; otherwise user should use known UUIDs
-                // subscribe to all characteristics that are notify-capable for demo
                 gatt.services.forEach { svc ->
                     svc.characteristics.forEach { c ->
-                        if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
-                            // enable notification locally
+                        // 🛠️ FIX: Discover BOTH TX and RX characteristics
+                        if (c.uuid == serverTxUuid) {
+                            // Subscribe to notifications for TX
                             gatt.setCharacteristicNotification(c, true)
-                            // write descriptor to enable on remote
                             val desc =
                                 c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                             desc?.let { gatt.writeDescriptor(it) }
-                            logI("Subscribed to ${c.uuid}")
+                            logI("Subscribed to TX: ${c.uuid}")
+                        }
+
+                        if (c.uuid == serverRxUuid) {
+                            // 🛠️ IMPORTANT: Store the RX characteristic for writing
+                            // You need to store this in a map: deviceId -> rxCharacteristic
+                            logI("Found RX characteristic: ${c.uuid}")
+                            // Send event to Flutter that RX char was found
+                            sendEvent(
+                                mapOf(
+                                    "type" to "characteristic_found",
+                                    "deviceId" to gatt.device.address,
+                                    "charUuid" to c.uuid.toString()
+                                )
+                            )
                         }
                     }
                 }
