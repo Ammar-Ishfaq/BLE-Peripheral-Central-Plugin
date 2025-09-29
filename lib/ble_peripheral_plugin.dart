@@ -3,21 +3,38 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 class BlePeripheralPlugin {
-  static const MethodChannel _method =
-  MethodChannel('ble_peripheral_plugin/methods');
-  static const EventChannel _event =
-  EventChannel('ble_peripheral_plugin/events');
+  static const MethodChannel _method = MethodChannel('ble_peripheral_plugin/methods');
+  static const EventChannel _event = EventChannel('ble_peripheral_plugin/events');
 
   static Stream<Map<String, dynamic>>? _eventStream;
   static const int MAX_MTU = 512;
 
-  /// Request MTU size (Central → Peripheral)
+  // 🆕 BITCHAT advertising methods
+  static Future<void> startAdvertisingData(String data) async {
+    await _method.invokeMethod('startAdvertisingData', {
+      'data': data,
+    });
+  }
+
+  static Future<void> stopAdvertisingData() async {
+    await _method.invokeMethod('stopAdvertisingData');
+  }
+
+  static Future<void> startScanForAdvertisements() async {
+    await _method.invokeMethod('startScanForAdvertisements');
+  }
+
+  static Future<void> stopScanForAdvertisements() async {
+    await _method.invokeMethod('stopScanForAdvertisements');
+  }
+
+  // Existing methods
   static Future<void> requestMtu([int mtu = MAX_MTU]) async {
     await _method.invokeMethod('requestMtu', {
       'mtu': mtu,
     });
   }
-  /// Start peripheral mode with service/characteristic UUIDs
+
   static Future<void> startPeripheral(
       String serviceUuid, String txUuid, String rxUuid) async {
     await _method.invokeMethod('startPeripheral', {
@@ -31,7 +48,6 @@ class BlePeripheralPlugin {
     await _method.invokeMethod('stopPeripheral');
   }
 
-  /// Send notification (Peripheral → Central)
   static Future<void> sendNotification(
       String charUuid, Uint8List value) async {
     await _method.invokeMethod('sendNotification', {
@@ -39,8 +55,6 @@ class BlePeripheralPlugin {
       'value': value,
     });
   }
-
-  // ---------------- Central ----------------
 
   static Future<void> startScan(String serviceUuid) async {
     await _method.invokeMethod('startScan', {"serviceUuid": serviceUuid});
@@ -58,7 +72,6 @@ class BlePeripheralPlugin {
     await _method.invokeMethod('disconnect');
   }
 
-  /// Write to peripheral characteristic (Central → Peripheral)
   static Future<void> writeCharacteristic(
       String charUuid, Uint8List value) async {
     await _method.invokeMethod('writeCharacteristic', {
@@ -66,8 +79,6 @@ class BlePeripheralPlugin {
       'value': value,
     });
   }
-
-  // ---------------- Events ----------------
 
   static Stream<Map<String, dynamic>> get events {
     _eventStream ??= _event
@@ -80,10 +91,8 @@ class BlePeripheralPlugin {
     await _method.invokeMethod('enableLogs', {"enable": enable});
   }
 
-  /// Check if Bluetooth is ON (iOS + Android)
   static Future<bool> isBluetoothOn() async {
     final result = await _method.invokeMethod<bool>('isBluetoothOn');
     return result ?? false;
   }
-
 }

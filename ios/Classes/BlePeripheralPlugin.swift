@@ -9,17 +9,20 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     private var eventChannel: FlutterEventChannel!
     private var eventSink: FlutterEventSink?
 
-    // Peripheral (Server)
+    // 🆕 BITCHAT Advertising Properties
     private var peripheralManager: CBPeripheralManager?
+    private var centralManager: CBCentralManager?
+    private var isAdvertisingData = false
+    private var isScanningAdvertisements = false
+    private let advertisingServiceUUID = CBUUID(string: "12345678-1234-5678-1234-56789abc0000")
+
+    // Existing GATT properties
     private var txCharacteristic: CBMutableCharacteristic?
     private var rxCharacteristic: CBMutableCharacteristic?
     private var serviceUUID: CBUUID?
     private var txUUID: CBUUID?
     private var rxUUID: CBUUID?
     private var subscribers = Set<CBCentral>()
-
-    // Central (Client)
-    private var centralManager: CBCentralManager?
     private var discoveredPeripherals = [CBPeripheral]()
     private var connectedPeripherals = [CBPeripheral]()
     private var peripheralRX: CBCharacteristic?
@@ -29,7 +32,6 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     private var isCentralMode = false
     private var loggingEnabled = true
 
-    // Flutter Plugin registration
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = BlePeripheralPlugin()
         instance.methodChannel = FlutterMethodChannel(name: "ble_peripheral_plugin/methods", binaryMessenger: registrar.messenger())
@@ -37,12 +39,11 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
         instance.eventChannel.setStreamHandler(instance)
 
-        // Initialize managers to get initial Bluetooth state
+        // Initialize managers
         instance.initializeManagers()
     }
 
     private func initializeManagers() {
-        // Initialize both managers to monitor Bluetooth state
         if peripheralManager == nil {
             peripheralManager = CBPeripheralManager(delegate: self, queue: nil, options: [CBPeripheralManagerOptionShowPowerAlertKey: false])
         }
@@ -63,16 +64,40 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         return nil
     }
 
-    // MARK: - Method Call
+    // MARK: - Method Call Handler
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+
+        // 🆕 BITCHAT Advertising Methods
+        case "startAdvertisingData":
+            guard let args = call.arguments as? [String: Any],
+                  let data = args["data"] as? String else {
+                result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing data", details: nil))
+                return
+            }
+            startAdvertisingData(data: data)
+            result(nil)
+
+        case "stopAdvertisingData":
+            stopAdvertisingData()
+            result(nil)
+
+        case "startScanForAdvertisements":
+            startScanForAdvertisements()
+            result(nil)
+
+        case "stopScanForAdvertisements":
+            stopScanForAdvertisements()
+            result(nil)
+
+        // Existing methods
         case "isBluetoothOn":
             if let centralManager = centralManager {
                 result(centralManager.state == .poweredOn)
             } else if let peripheralManager = peripheralManager {
                 result(peripheralManager.state == .poweredOn)
             } else {
-                result(false) // default if managers not initialized
+                result(false)
             }
 
         case "startPeripheral":
@@ -135,6 +160,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
             }
             writeCharacteristic(charUuid: charUuid, value: value.data)
             result(nil)
+
         case "requestMtu":
             if let args = call.arguments as? [String: Any],
                let deviceId = args["deviceId"] as? String,
@@ -144,6 +170,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
             } else {
                 result(185) // default safe MTU for iOS
             }
+
         case "enableLogs":
             if let args = call.arguments as? [String: Any],
                let enable = args["enable"] as? Bool {
@@ -156,7 +183,75 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         }
     }
 
-    // MARK: - Peripheral Methods
+    // 🆕 BITCHAT: Start Advertising Data
+    private func startAdvertisingData(data: String) {
+        stopAdvertisingData()
+
+        guard let peripheralManager = peripheralManager, peripheralManager.state == .poweredOn else {
+            sendEvent(["type": "error", "message": "Bluetooth not available for advertising"])
+            return
+        }
+
+        let service = CBMutableService(type: advertisingServiceUUID, primary: true)
+
+        // Create a characteristic to hold our data
+        let dataCharacteristic = CBMutableCharacteristic(
+            type: CBUUID(string: "12345678-1234-5678-1234-56789abc0001"),
+            properties: [.read],
+            value: data.data(using: .utf8),
+            permissions: [.readable]
+        )
+
+        service.characteristics = [dataCharacteristic]
+        peripheralManager.add(service)
+
+        // Start advertising
+        peripheralManager.startAdvertising([
+            CBAdvertisementDataServiceUUIDsKey: [advertisingServiceUUID],
+            CBAdvertisementDataLocalNameKey: "BITCHAT"
+        ])
+
+        isAdvertisingData = true
+        sendEvent(["type": "advertising_started"])
+        log("✅ Advertising data started: \(data.prefix(20))...")
+    }
+
+    // 🆕 BITCHAT: Stop Advertising Data
+    private func stopAdvertisingData() {
+        if isAdvertisingData {
+            peripheralManager?.stopAdvertising()
+            isAdvertisingData = false
+            sendEvent(["type": "advertising_stopped"])
+            log("🛑 Advertising data stopped")
+        }
+    }
+
+    // 🆕 BITCHAT: Start Scanning for Advertisements
+    private func startScanForAdvertisements() {
+        guard let centralManager = centralManager, centralManager.state == .poweredOn else {
+            sendEvent(["type": "error", "message": "Bluetooth not available for scanning"])
+            return
+        }
+
+        centralManager.scanForPeripherals(
+            withServices: [advertisingServiceUUID],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
+
+        isScanningAdvertisements = true
+        sendEvent(["type": "ad_scan_started"])
+        log("🔍 Scanning for advertisements started")
+    }
+
+    // 🆕 BITCHAT: Stop Scanning Advertisements
+    private func stopScanForAdvertisements() {
+        centralManager?.stopScan()
+        isScanningAdvertisements = false
+        sendEvent(["type": "ad_scan_stopped"])
+        log("🛑 Advertisement scanning stopped")
+    }
+
+    // MARK: - Existing Peripheral Methods
     private func startPeripheral(service: String, tx: String, rx: String) {
         isPeripheralMode = true
         if let peripheralManager = peripheralManager, peripheralManager.state == .poweredOn {
@@ -222,7 +317,7 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         }
     }
 
-    // MARK: - Central Methods
+    // MARK: - Existing Central Methods
     private func startScan(service: String) {
         isCentralMode = true
         let uuid = CBUUID(string: service)
@@ -289,7 +384,6 @@ extension BlePeripheralPlugin: CBPeripheralManagerDelegate {
         sendEvent(["type": "bluetooth_state", "isOn": isOn])
 
         if peripheral.state == .poweredOn && isPeripheralMode {
-            // Re-setup peripheral if it was active
             if let serviceUUID = serviceUUID, let txUUID = txUUID, let rxUUID = rxUUID {
                 setupPeripheral(service: serviceUUID.uuidString, tx: txUUID.uuidString, rx: rxUUID.uuidString)
             }
@@ -317,6 +411,15 @@ extension BlePeripheralPlugin: CBPeripheralManagerDelegate {
             peripheral.respond(to: req, withResult: .success)
         }
     }
+
+    public func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        if let error = error {
+            log("Advertising error: \(error.localizedDescription)")
+            sendEvent(["type": "advertising_failed", "message": error.localizedDescription])
+        } else {
+            log("Advertising started successfully")
+        }
+    }
 }
 
 // MARK: - CBCentralManagerDelegate & CBPeripheralDelegate
@@ -327,15 +430,38 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         sendEvent(["type": "bluetooth_state", "isOn": isOn])
 
         if central.state == .poweredOn && isCentralMode {
-            // Restart scan if it was active
             if let serviceUUID = serviceUUID {
                 central.scanForPeripherals(withServices: [serviceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
             }
+        }
+
+        if central.state == .poweredOn && isScanningAdvertisements {
+            startScanForAdvertisements()
         }
     }
 
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                advertisementData: [String: Any], rssi RSSI: NSNumber) {
+
+        // 🆕 Handle BITCHAT advertisements
+        if isScanningAdvertisements {
+            if let serviceData = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data],
+               let data = serviceData[advertisingServiceUUID] {
+
+                if let message = String(data: data, encoding: .utf8) {
+                    log("📨 Received advertisement from \(peripheral.identifier.uuidString): \(message.prefix(30))...")
+
+                    sendEvent([
+                        "type": "advertisement_received",
+                        "data": message,
+                        "deviceId": peripheral.identifier.uuidString,
+                        "rssi": RSSI.intValue
+                    ])
+                }
+            }
+        }
+
+        // Existing GATT scan handling
         if !discoveredPeripherals.contains(where: { $0.identifier == peripheral.identifier }) {
             discoveredPeripherals.append(peripheral)
         }

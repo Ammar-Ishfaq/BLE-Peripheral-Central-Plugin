@@ -13,15 +13,13 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.*
 
-class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
-    EventChannel.StreamHandler {
+class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
     companion object {
         private const val TAG = "BlePeripheralPlugin"
-        private const val MAX_MTU = 512 // Set your desired MTU size
+        private const val MAX_MTU = 512
+        private const val ADVERTISING_SERVICE_UUID = "12345678-1234-5678-1234-56789abc0000"
         private var loggingEnabled = true
-
-
     }
 
     private fun logI(msg: String) {
@@ -48,6 +46,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private var advertiser: BluetoothLeAdvertiser? = null
     private var scanner: BluetoothLeScanner? = null
 
+    // 🆕 BITCHAT advertising state
+    private var isAdvertisingData = false
+    private var isScanningAdvertisements = false
+    private val advertisementScanner: BluetoothLeScanner? by lazy { bluetoothAdapter?.bluetoothLeScanner }
+
     // peripheral (server) state
     private var gattServer: BluetoothGattServer? = null
     private var serverServiceUuid: UUID? = null
@@ -68,8 +71,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         eventChannel = EventChannel(binding.binaryMessenger, "ble_peripheral_plugin/events")
         eventChannel.setStreamHandler(this)
 
-        bluetoothManager =
-            appContext?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothManager = appContext?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager?.adapter
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         scanner = bluetoothAdapter?.bluetoothLeScanner
@@ -96,6 +98,29 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
+                // 🆕 BITCHAT advertising methods
+                "startAdvertisingData" -> {
+                    val data = call.argument<String>("data")!!
+                    startAdvertisingData(data)
+                    result.success(null)
+                }
+
+                "stopAdvertisingData" -> {
+                    stopAdvertisingData()
+                    result.success(null)
+                }
+
+                "startScanForAdvertisements" -> {
+                    startScanForAdvertisements()
+                    result.success(null)
+                }
+
+                "stopScanForAdvertisements" -> {
+                    stopScanForAdvertisements()
+                    result.success(null)
+                }
+
+                // Existing methods
                 "startPeripheral" -> {
                     val serviceUuid = call.argument<String>("serviceUuid")!!
                     val txUuid = call.argument<String>("txUuid")!!
@@ -169,31 +194,147 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-    // ---------- Peripheral (GATT Server + Advertiser) ----------
+    // 🆕 BITCHAT: Start advertising data
+    @SuppressLint("MissingPermission")
+    private fun startAdvertisingData(data: String) {
+        stopAdvertisingData() // Stop any existing advertising
 
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(false) // 🎯 BITCHAT: No connections!
+            .build()
+
+        val advertiseData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .addServiceUuid(ParcelUuid(UUID.fromString(ADVERTISING_SERVICE_UUID)))
+            .addServiceData(
+                ParcelUuid(UUID.fromString(ADVERTISING_SERVICE_UUID)),
+                data.toByteArray(Charsets.UTF_8)
+            )
+            .build()
+
+        advertiser?.startAdvertising(settings, advertiseData, object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                logI("✅ Advertising data started: ${data.take(20)}...")
+                isAdvertisingData = true
+                sendEvent(mapOf("type" to "advertising_started"))
+            }
+
+            override fun onStartFailure(errorCode: Int) {
+                logE("❌ Advertising failed: $errorCode")
+                sendEvent(mapOf("type" to "advertising_failed", "code" to errorCode))
+            }
+        })
+    }
+
+    // 🆕 BITCHAT: Stop advertising data
+    @SuppressLint("MissingPermission")
+    private fun stopAdvertisingData() {
+        if (isAdvertisingData) {
+            try {
+                advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+                isAdvertisingData = false
+                logI("🛑 Advertising data stopped")
+            } catch (e: Exception) {
+                logW("Stop advertising error: ${e.message}")
+            }
+        }
+    }
+
+    // 🆕 BITCHAT: Scan for advertisements
+    @SuppressLint("MissingPermission")
+    private fun startScanForAdvertisements() {
+        try {
+            val filters = listOf(
+                ScanFilter.Builder()
+                    .setServiceUuid(ParcelUuid(UUID.fromString(ADVERTISING_SERVICE_UUID)))
+                    .build()
+            )
+
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setReportDelay(0)
+                .build()
+
+            advertisementScanner?.startScan(filters, settings, advertisementScanCallback)
+            isScanningAdvertisements = true
+            logI("🔍 Scanning for advertisements started")
+            sendEvent(mapOf("type" to "ad_scan_started"))
+
+        } catch (t: Throwable) {
+            logE("Start advertisement scan error: ${t.message}")
+            sendEvent(mapOf("type" to "ad_scan_error", "message" to t.message))
+        }
+    }
+
+    // 🆕 BITCHAT: Stop scanning advertisements
+    @SuppressLint("MissingPermission")
+    private fun stopScanForAdvertisements() {
+        try {
+            advertisementScanner?.stopScan(advertisementScanCallback)
+            isScanningAdvertisements = false
+            logI("🛑 Advertisement scanning stopped")
+            sendEvent(mapOf("type" to "ad_scan_stopped"))
+        } catch (t: Throwable) {
+            logW("Stop advertisement scan error: ${t.message}")
+        }
+    }
+
+    // 🆕 BITCHAT: Advertisement scan callback
+    private val advertisementScanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            try {
+                val scanRecord = result.scanRecord
+                val serviceData = scanRecord?.serviceData
+                val serviceUuid = ParcelUuid(UUID.fromString(ADVERTISING_SERVICE_UUID))
+
+                serviceData?.get(serviceUuid)?.let { data ->
+                    val message = String(data, Charsets.UTF_8)
+                    val deviceId = result.device.address
+                    val rssi = result.rssi
+
+                    logI("📨 Received advertisement from $deviceId: ${message.take(30)}...")
+
+                    sendEvent(mapOf(
+                        "type" to "advertisement_received",
+                        "data" to message,
+                        "deviceId" to deviceId,
+                        "rssi" to rssi
+                    ))
+                }
+            } catch (t: Throwable) {
+                logE("Advertisement parse error: ${t.message}")
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            logE("Advertisement scan failed: $errorCode")
+            sendEvent(mapOf("type" to "ad_scan_failed", "code" to errorCode))
+        }
+    }
+
+    // ---------- Existing Peripheral Methods ----------
     private fun startPeripheral(serviceUuidStr: String, txUuidStr: String, rxUuidStr: String) {
-        stopPeripheral() // cleanup if any
+        stopPeripheral()
         serverServiceUuid = UUID.fromString(serviceUuidStr)
         serverTxUuid = UUID.fromString(txUuidStr)
         serverRxUuid = UUID.fromString(rxUuidStr)
 
-        // open GATT server
         gattServer = bluetoothManager?.openGattServer(appContext, gattServerCallback)
         if (gattServer == null) {
             sendEvent(mapOf("type" to "error", "message" to "Cannot open GATT server"))
             return
         }
 
-        // create service and characteristics
-        val service =
-            BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service = BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         txCharacteristic = BluetoothGattCharacteristic(
             serverTxUuid,
             BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ
         )
-        // CCCD for notifications
+
         val cccd = BluetoothGattDescriptor(
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
             BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
@@ -210,7 +351,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         service.addCharacteristic(rxCharacteristic)
         gattServer?.addService(service)
 
-        // start advertising
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
@@ -218,7 +358,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             .build()
 
         val dataBuilder = AdvertiseData.Builder()
-            .setIncludeDeviceName(false) // keep advertisement small to avoid ADVERTISE_FAILED_DATA_TOO_LARGE
+            .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(serverServiceUuid!!))
 
         val data = dataBuilder.build()
@@ -226,7 +366,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         advertiser?.startAdvertising(settings, data, advertiseCallback)
         sendEvent(mapOf("type" to "peripheral_started"))
         logI("Peripheral started: $serviceUuidStr")
-
     }
 
     private fun stopPeripheral() {
@@ -261,7 +400,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         characteristic.value = value
-        // notify all subscribers we tracked via descriptor writes
         synchronized(subscribers) {
             for (dev in subscribers) {
                 try {
@@ -273,7 +411,9 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-    // GATT Server callback (peripheral)
+    // ... (rest of existing GATT server/client code remains the same)
+    // GATT Server callback, Advertise callback, Scan callback, etc.
+
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             logI("Server connection state change: ${device.address} -> $newState")
@@ -301,7 +441,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             value: ByteArray
         ) {
             logI("Write request on server char ${characteristic.uuid} from ${device.address}")
-            // send to Flutter as rx
             sendEvent(
                 mapOf(
                     "type" to "rx",
@@ -338,40 +477,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             }
         }
 
-        // Remove the problematic onMtuChanged method or fix its signature
-        // The correct signature for onMtuChanged in BluetoothGattServerCallback is:
-        // override fun onMtuChanged(device: BluetoothDevice, mtu: Int) { ... }
-
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             super.onMtuChanged(device, mtu)
             logI("Server MTU changed: ${device.address} -> $mtu")
-            setMtu(device, mtu)
+            sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
         }
     }
 
-    // Add this method to handle MTU changes in peripheral mode
-    private fun setMtu(device: BluetoothDevice, mtu: Int) {
-        // For peripheral mode, we need to handle MTU in the server callback
-        logI("MTU changed for ${device.address}: $mtu")
-        sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
-    }
-
-    // Add this method to request MTU
-    @SuppressLint("MissingPermission")
-    private fun requestMtu(mtu: Int) {
-        try {
-            if (gattClient != null) {
-                gattClient?.requestMtu(mtu)
-                logI("Requesting MTU: $mtu")
-            } else {
-                logW("Cannot request MTU - GATT client not connected")
-            }
-        } catch (t: Throwable) {
-            logE("requestMtu error: ${t.message}")
-        }
-    }
-
-    // Advertise callback
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             logI("Advertising started")
@@ -383,8 +495,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             sendEvent(mapOf("type" to "advertising_failed", "code" to errorCode))
         }
     }
-
-    // ---------- Central (scanner + gatt client) ----------
 
     @SuppressLint("MissingPermission")
     private fun startScan(serviceUuidStr: String) {
@@ -438,7 +548,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         try {
             val device = bluetoothAdapter?.getRemoteDevice(deviceId) ?: return
             connectedDevice = device
-            // autoConnect = false
             gattClient = device.connectGatt(appContext, false, gattClientCallback)
         } catch (t: Throwable) {
             logE("connect error: ${t.message}")
@@ -464,7 +573,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             logI("Client connection state: $newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 sendEvent(mapOf("type" to "connected", "deviceId" to (gatt.device?.address ?: "")))
-                // discover services
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 sendEvent(
@@ -481,29 +589,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             try {
                 gatt.services.forEach { svc ->
                     svc.characteristics.forEach { c ->
-                        // 🛠️ FIX: Discover BOTH TX and RX characteristics
-                        if (c.uuid == serverTxUuid) {
-                            // Subscribe to notifications for TX
+                        if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
                             gatt.setCharacteristicNotification(c, true)
                             val desc =
                                 c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                             desc?.let { gatt.writeDescriptor(it) }
-                            logI("Subscribed to TX: ${c.uuid}")
-                        }
-
-                        if (c.uuid == serverRxUuid) {
-                            // 🛠️ IMPORTANT: Store the RX characteristic for writing
-                            // You need to store this in a map: deviceId -> rxCharacteristic
-                            logI("Found RX characteristic: ${c.uuid}")
-                            // Send event to Flutter that RX char was found
-                            sendEvent(
-                                mapOf(
-                                    "type" to "characteristic_found",
-                                    "deviceId" to gatt.device.address,
-                                    "charUuid" to c.uuid.toString()
-                                )
-                            )
+                            logI("Subscribed to ${c.uuid}")
                         }
                     }
                 }
@@ -541,9 +633,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 )
             )
         }
-
-        // Remove the problematic onConnectionStateChange method with wrong signature
-        // The correct signature is already implemented above
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             super.onMtuChanged(gatt, mtu, status)
@@ -589,32 +678,36 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun requestMtu(mtu: Int) {
+        try {
+            if (gattClient != null) {
+                gattClient?.requestMtu(mtu)
+                logI("Requesting MTU: $mtu")
+            } else {
+                logW("Cannot request MTU - GATT client not connected")
+            }
+        } catch (t: Throwable) {
+            logE("requestMtu error: ${t.message}")
+        }
+    }
+
     // ---------- helpers ----------
     private fun sendEvent(payload: Map<String, Any?>) {
         appContext?.let {
-            if (it is android.app.Activity) {
-                it.runOnUiThread {
-                    try {
-                        eventSink?.success(payload)
-                    } catch (t: Throwable) {
-                        logW("sendEvent error: ${t.message}")
-                    }
-                }
-            } else {
-                // fallback: use a Handler if appContext is not Activity
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    try {
-                        eventSink?.success(payload)
-                    } catch (t: Throwable) {
-                        logW("sendEvent error: ${t.message}")
-                    }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    eventSink?.success(payload)
+                } catch (t: Throwable) {
+                    logW("sendEvent error: ${t.message}")
                 }
             }
         }
     }
 
-
     private fun stopAll() {
+        stopAdvertisingData()
+        stopScanForAdvertisements()
         stopScan()
         disconnect()
         stopPeripheral()
