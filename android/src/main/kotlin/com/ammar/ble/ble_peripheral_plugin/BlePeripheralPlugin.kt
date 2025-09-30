@@ -415,15 +415,18 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val dev = result.device
-            logI("Scan result: ${dev.address} name=${dev.name ?: ""}")
-            sendEvent(
-                mapOf(
-                    "type" to "scanResult",
-                    "deviceId" to dev.address,
-                    "name" to (dev.name ?: "")
-                )
-            )
+            val device = result.device
+            val map: MutableMap<String, Any?> = HashMap()
+            map["type"] = "scanResult"
+            map["deviceId"] = device.address ?: device.name ?: "${device.hashCode()}"
+            map["name"] = device.name ?: "Unknown"
+            map["rssi"] = result.rssi // <-- ✅ ADD THIS
+
+            // (Optional) include more metadata if you already send it
+            // map["timestampNanos"] = result.timestampNanos
+            // map["connectable"] = (Build.VERSION.SDK_INT >= 26 && result.isConnectable)
+
+            eventSink?.success(map)
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -476,40 +479,41 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             }
         }
 
+        // IN ANDROID PLUGIN - Fix onServicesDiscovered
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            logI("Services discovered")
-            try {
-                gatt.services.forEach { svc ->
-                    svc.characteristics.forEach { c ->
-                        // 🛠️ FIX: Discover BOTH TX and RX characteristics
-                        if (c.uuid == serverTxUuid) {
-                            // Subscribe to notifications for TX
-                            gatt.setCharacteristicNotification(c, true)
-                            val desc =
-                                c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                            desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            desc?.let { gatt.writeDescriptor(it) }
-                            logI("Subscribed to TX: ${c.uuid}")
-                        }
+            logI("Services discovered: status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                sendEvent(mapOf("type" to "services_discovery_failed", "deviceId" to gatt.device.address))
+                return
+            }
 
-                        if (c.uuid == serverRxUuid) {
-                            // 🛠️ IMPORTANT: Store the RX characteristic for writing
-                            // You need to store this in a map: deviceId -> rxCharacteristic
-                            logI("Found RX characteristic: ${c.uuid}")
-                            // Send event to Flutter that RX char was found
-                            sendEvent(
-                                mapOf(
-                                    "type" to "characteristic_found",
-                                    "deviceId" to gatt.device.address,
-                                    "charUuid" to c.uuid.toString()
-                                )
-                            )
-                        }
+            try {
+                val service = gatt.getService(serverServiceUuid)
+                if (service != null) {
+                    // Set up TX characteristic for notifications
+                    val txChar = service.getCharacteristic(serverTxUuid)
+                    if (txChar != null) {
+                        gatt.setCharacteristicNotification(txChar, true)
+                        val descriptor = txChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                        descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(descriptor)
+                        logI("TX notifications enabled for ${gatt.device.address}")
+                        // Don't return - wait for descriptor write callback
+                    }
+
+                    // Verify RX characteristic exists
+                    val rxChar = service.getCharacteristic(serverRxUuid)
+                    if (rxChar == null) {
+                        logW("RX characteristic not found for ${gatt.device.address}")
                     }
                 }
-                gattClient = gatt
+
+                // Signal ready regardless (some devices might not have TX)
+                sendEvent(mapOf("type" to "services_ready", "deviceId" to gatt.device.address))
+
             } catch (t: Throwable) {
-                logW("Service discover error: ${t.message}")
+                logE("Service discovery error: ${t.message}")
+                sendEvent(mapOf("type" to "services_ready", "deviceId" to gatt.device.address))
             }
         }
 

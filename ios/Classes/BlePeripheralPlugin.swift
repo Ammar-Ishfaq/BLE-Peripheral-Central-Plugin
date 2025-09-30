@@ -339,7 +339,7 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         if !discoveredPeripherals.contains(where: { $0.identifier == peripheral.identifier }) {
             discoveredPeripherals.append(peripheral)
         }
-        sendEvent(["type": "scanResult", "deviceId": peripheral.identifier.uuidString, "name": peripheral.name ?? ""])
+        sendEvent(["type": "scanResult", "deviceId": peripheral.identifier.uuidString, "name": peripheral.name ?? "", "rssi": RSSI.intValue ?? ""])
         log("Discovered peripheral: \(peripheral.identifier.uuidString)")
     }
 
