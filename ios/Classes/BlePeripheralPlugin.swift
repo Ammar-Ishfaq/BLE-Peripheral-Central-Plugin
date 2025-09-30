@@ -374,7 +374,11 @@ extension BlePeripheralPlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
                 peripheralRX = char
             }
         }
+        // >>> ADD THIS <<<
+        sendEvent(["type": "services_discovered",
+                   "deviceId": peripheral.identifier.uuidString])
     }
+
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let value = characteristic.value else { return }

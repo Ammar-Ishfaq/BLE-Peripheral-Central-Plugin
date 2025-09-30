@@ -475,32 +475,62 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            logI("Services discovered")
-            // subscribe to notified characteristic if matches serverTxUuid
+            logI("Services discovered: status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+
             try {
-                // find characteristic in discovered services
-                val targetCharUuid =
-                    serverTxUuid // if connecting to our own server this may be set; otherwise user should use known UUIDs
-                // subscribe to all characteristics that are notify-capable for demo
+                var txChar: BluetoothGattCharacteristic? = null
+
+                // Find our TX (notify) characteristic ONLY
                 gatt.services.forEach { svc ->
                     svc.characteristics.forEach { c ->
-                        if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
-                            // enable notification locally
-                            gatt.setCharacteristicNotification(c, true)
-                            // write descriptor to enable on remote
-                            val desc =
-                                c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                            desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            desc?.let { gatt.writeDescriptor(it) }
-                            logI("Subscribed to ${c.uuid}")
+                        if (c.uuid == serverTxUuid && (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0) {
+                            txChar = c
                         }
                     }
                 }
+
+                // Enable notifications for TX (single CCCD write)
+                txChar?.let { c ->
+                    gatt.setCharacteristicNotification(c, true)
+                    val cccd = c.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    if (cccd != null) {
+                        cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        // IMPORTANT: Only ONE write at a time; wait for onDescriptorWrite
+                        gatt.writeDescriptor(cccd)
+                        logI("Writing CCCD for TX ${c.uuid}")
+                    } else {
+                        // If no CCCD, consider it ready now
+                        sendEvent(mapOf(
+                            "type" to "services_ready",
+                            "deviceId" to (gatt.device?.address ?: "")
+                        ))
+                    }
+                } ?: run {
+                    // No TX notify to enable? Still allow writes.
+                    sendEvent(mapOf(
+                        "type" to "services_ready",
+                        "deviceId" to (gatt.device?.address ?: "")
+                    ))
+                }
+
                 gattClient = gatt
             } catch (t: Throwable) {
                 logW("Service discover error: ${t.message}")
             }
         }
+
+        // Serialize flow: after CCCD write completes we’re finally READY
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            super.onDescriptorWrite(gatt, descriptor, status)
+            logI("Descriptor write status=$status for ${descriptor.characteristic.uuid}")
+            sendEvent(mapOf(
+                "type" to if (status == BluetoothGatt.GATT_SUCCESS) "services_ready" else "services_ready", // proceed either way
+                "deviceId" to (gatt.device?.address ?: "")
+            ))
+        }
+
+
 
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
