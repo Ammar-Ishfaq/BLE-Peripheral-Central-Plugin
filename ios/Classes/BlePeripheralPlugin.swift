@@ -51,6 +51,43 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
             centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: false])
         }
     }
+  // 🆕 COMPLETE CLEANUP METHOD
+    private func stopAll() {
+        log("🛑 Stopping all BLE services...")
+
+        // 1. Stop advertising
+        peripheralManager?.stopAdvertising()
+
+        // 2. Stop scanning
+        centralManager?.stopScan()
+
+        // 3. Disconnect all peripherals
+        connectedPeripherals.forEach { peripheral in
+            centralManager?.cancelPeripheralConnection(peripheral)
+            peripheral.delegate = nil
+        }
+
+        // 4. Remove all services
+        peripheralManager?.removeAllServices()
+
+        // 5. Clear all collections
+        subscribers.removeAll()
+        discoveredPeripherals.removeAll()
+        connectedPeripherals.removeAll()
+
+        // 6. Reset all state
+        isPeripheralMode = false
+        isCentralMode = false
+        serviceUUID = nil
+        txUUID = nil
+        rxUUID = nil
+        txCharacteristic = nil
+        rxCharacteristic = nil
+        peripheralRX = nil
+
+        log("✅ All BLE services stopped completely")
+        sendEvent(["type": "all_stopped"])
+    }
 
     // MARK: - Stream Handler
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
@@ -150,7 +187,9 @@ public class BlePeripheralPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
                 loggingEnabled = enable
             }
             result(nil)
-
+        case "stopAll":
+            stopAll()
+            result(nil)
         default:
             result(FlutterMethodNotImplemented)
         }

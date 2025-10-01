@@ -161,7 +161,11 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     val isOn = bluetoothAdapter?.isEnabled ?: false
                     result.success(isOn)
                 }
-
+                // 🆕 Add this method
+                "stopAll" -> {
+                    stopAll()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         } catch (t: Throwable) {
@@ -214,7 +218,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(true)
+            .setConnectable(false)
             .build()
 
         val dataBuilder = AdvertiseData.Builder()
@@ -619,8 +623,69 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
 
     private fun stopAll() {
-        stopScan()
-        disconnect()
-        stopPeripheral()
+        logI("🛑 Stopping ALL BLE services completely...")
+
+        // 1. Stop ALL advertising (multiple callbacks)
+        try {
+            advertiser?.stopAdvertising(advertiseCallback)
+            // If you have other advertising callbacks, stop them here:
+            // advertiser?.stopAdvertising(advertisementScanCallback)
+        } catch (ignored: Exception) {
+        }
+
+        // 2. Stop ALL scanning (multiple callbacks)
+        try {
+            scanner?.stopScan(scanCallback)
+            // If you have other scan callbacks, stop them here:
+            // scanner?.stopScan(advertisementScanCallback)
+        } catch (ignored: Exception) {
+            logE("Stop Scan Error: "+ignored)
+
+        }
+
+        // 3. Close GATT server completely
+        try {
+            gattServer?.clearServices() // 🆕 CRITICAL: Remove services first
+            gattServer?.close()
+            gattServer = null
+        } catch (ignored: Exception) {
+            logE("Gatt Server Error: "+ignored)
+
+
+        }
+        // 4. Disconnect and close GATT client
+        try {
+            gattClient?.disconnect()
+            gattClient?.close()
+            gattClient = null
+            connectedDevice = null
+        } catch (ignored: Exception) {
+            logE("Gatt CLient Error: "+ignored)
+
+        }
+
+        // 5. 🆕 Clear Bluetooth manager references
+        try {
+            // These help with garbage collection
+            bluetoothManager = null
+            // Don't null adapter/advertiser/scanner - they're system singletons
+        } catch (ignored: Exception) {
+            logE("BLE Manager nulled "+ignored)
+
+        }
+
+        // 6. Clear all collections and state
+        subscribers.clear()
+        serverServiceUuid = null
+        serverTxUuid = null
+        serverRxUuid = null
+        txCharacteristic = null
+        rxCharacteristic = null
+
+        // 7. 🆕 Force garbage collection hint
+        System.gc()
+
+        logI("✅ ALL BLE services stopped completely - ready for fresh start.")
+        sendEvent(mapOf("type" to "all_stopped"))
     }
 }

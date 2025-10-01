@@ -85,5 +85,7 @@ class BlePeripheralPlugin {
     final result = await _method.invokeMethod<bool>('isBluetoothOn');
     return result ?? false;
   }
-
+  static Future<void> stopAll() async {
+    await _method.invokeMethod('stopAll');
+  }
 }
