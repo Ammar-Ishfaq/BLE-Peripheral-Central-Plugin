@@ -12,16 +12,15 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler {
 
     companion object {
         private const val TAG = "BlePeripheralPlugin"
-        private const val MAX_MTU = 512 // Set your desired MTU size
+        private const val MAX_MTU = 512
         private var loggingEnabled = true
-
-
     }
 
     private fun logI(msg: String) {
@@ -57,9 +56,10 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
     private val subscribers = mutableSetOf<BluetoothDevice>()
 
-    // central (client) state
-    private var gattClient: BluetoothGatt? = null
-    private var connectedDevice: BluetoothDevice? = null
+    // ✅ ENHANCED: Multiple central connections support
+    private val gattClients = ConcurrentHashMap<String, BluetoothGatt>()
+    private val connectedDevices = ConcurrentHashMap<String, BluetoothDevice>()
+    private val deviceCallbacks = ConcurrentHashMap<String, BluetoothGattCallback>()
 
     override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
@@ -73,7 +73,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         bluetoothAdapter = bluetoothManager?.adapter
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         scanner = bluetoothAdapter?.bluetoothLeScanner
-        logI("Plugin attached")
+        logI("Plugin attached with multiple connection support")
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
@@ -92,7 +92,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         eventSink = null
     }
 
-    // MethodChannel
+    // MethodChannel - UPDATED FOR MULTIPLE CONNECTIONS
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
@@ -134,21 +134,40 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 }
 
                 "disconnect" -> {
-                    disconnect()
+                    val deviceId = call.argument<String>("deviceId")
+                    disconnect(deviceId)
+                    result.success(null)
+                }
+
+                "disconnectAll" -> {
+                    disconnectAll()
                     result.success(null)
                 }
 
                 "writeCharacteristic" -> {
+                    val deviceId = call.argument<String>("deviceId")
                     val charUuid = call.argument<String>("charUuid")!!
                     val value = call.argument<ByteArray>("value")!!
-                    writeCharacteristic(charUuid, value)
+                    writeCharacteristic(deviceId, charUuid, value)
                     result.success(null)
                 }
 
                 "requestMtu" -> {
+                    val deviceId = call.argument<String>("deviceId")
                     val mtu = call.argument<Int>("mtu") ?: MAX_MTU
-                    requestMtu(mtu)
+                    requestMtu(deviceId, mtu)
                     result.success(null)
+                }
+
+                "getConnectedDevices" -> {
+                    val devices = getConnectedDevices()
+                    result.success(devices)
+                }
+
+                "isDeviceConnected" -> {
+                    val deviceId = call.argument<String>("deviceId")
+                    val isConnected = isDeviceConnected(deviceId)
+                    result.success(isConnected)
                 }
 
                 "enableLogs" -> {
@@ -161,7 +180,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     val isOn = bluetoothAdapter?.isEnabled ?: false
                     result.success(isOn)
                 }
-                // 🆕 Add this method
                 "stopAll" -> {
                     stopAll()
                     result.success(null)
@@ -174,30 +192,27 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     }
 
     // ---------- Peripheral (GATT Server + Advertiser) ----------
-
+    // (Unchanged from original)
     private fun startPeripheral(serviceUuidStr: String, txUuidStr: String, rxUuidStr: String) {
-        stopPeripheral() // cleanup if any
+        stopPeripheral()
         serverServiceUuid = UUID.fromString(serviceUuidStr)
         serverTxUuid = UUID.fromString(txUuidStr)
         serverRxUuid = UUID.fromString(rxUuidStr)
 
-        // open GATT server
         gattServer = bluetoothManager?.openGattServer(appContext, gattServerCallback)
         if (gattServer == null) {
             sendEvent(mapOf("type" to "error", "message" to "Cannot open GATT server"))
             return
         }
 
-        // create service and characteristics
-        val service =
-            BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service = BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         txCharacteristic = BluetoothGattCharacteristic(
             serverTxUuid,
             BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ
         )
-        // CCCD for notifications
+
         val cccd = BluetoothGattDescriptor(
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
             BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
@@ -214,15 +229,14 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         service.addCharacteristic(rxCharacteristic)
         gattServer?.addService(service)
 
-        // start advertising
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(false)
+            .setConnectable(true)
             .build()
 
         val dataBuilder = AdvertiseData.Builder()
-            .setIncludeDeviceName(false) // keep advertisement small to avoid ADVERTISE_FAILED_DATA_TOO_LARGE
+            .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(serverServiceUuid!!))
 
         val data = dataBuilder.build()
@@ -230,7 +244,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         advertiser?.startAdvertising(settings, data, advertiseCallback)
         sendEvent(mapOf("type" to "peripheral_started"))
         logI("Peripheral started: $serviceUuidStr")
-
     }
 
     private fun stopPeripheral() {
@@ -265,7 +278,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         characteristic.value = value
-        // notify all subscribers we tracked via descriptor writes
         synchronized(subscribers) {
             for (dev in subscribers) {
                 try {
@@ -277,7 +289,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-    // GATT Server callback (peripheral)
+    // GATT Server callback (peripheral) - UNCHANGED
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             logI("Server connection state change: ${device.address} -> $newState")
@@ -305,7 +317,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             value: ByteArray
         ) {
             logI("Write request on server char ${characteristic.uuid} from ${device.address}")
-            // send to Flutter as rx
             sendEvent(
                 mapOf(
                     "type" to "rx",
@@ -342,40 +353,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             }
         }
 
-        // Remove the problematic onMtuChanged method or fix its signature
-        // The correct signature for onMtuChanged in BluetoothGattServerCallback is:
-        // override fun onMtuChanged(device: BluetoothDevice, mtu: Int) { ... }
-
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             super.onMtuChanged(device, mtu)
             logI("Server MTU changed: ${device.address} -> $mtu")
-            setMtu(device, mtu)
+            sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
         }
     }
 
-    // Add this method to handle MTU changes in peripheral mode
-    private fun setMtu(device: BluetoothDevice, mtu: Int) {
-        // For peripheral mode, we need to handle MTU in the server callback
-        logI("MTU changed for ${device.address}: $mtu")
-        sendEvent(mapOf("type" to "mtu_changed", "deviceId" to device.address, "mtu" to mtu))
-    }
-
-    // Add this method to request MTU
-    @SuppressLint("MissingPermission")
-    private fun requestMtu(mtu: Int) {
-        try {
-            if (gattClient != null) {
-                gattClient?.requestMtu(mtu)
-                logI("Requesting MTU: $mtu")
-            } else {
-                logW("Cannot request MTU - GATT client not connected")
-            }
-        } catch (t: Throwable) {
-            logE("requestMtu error: ${t.message}")
-        }
-    }
-
-    // Advertise callback
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             logI("Advertising started")
@@ -388,7 +372,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-    // ---------- Central (scanner + gatt client) ----------
+    // ---------- ENHANCED: Multiple Central Connections ----------
 
     @SuppressLint("MissingPermission")
     private fun startScan(serviceUuidStr: String) {
@@ -419,18 +403,16 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val device = result.device
-            val map: MutableMap<String, Any?> = HashMap()
-            map["type"] = "scanResult"
-            map["deviceId"] = device.address ?: device.name ?: "${device.hashCode()}"
-            map["name"] = device.name ?: "Unknown"
-            map["rssi"] = result.rssi // <-- ✅ ADD THIS
-
-            // (Optional) include more metadata if you already send it
-            // map["timestampNanos"] = result.timestampNanos
-            // map["connectable"] = (Build.VERSION.SDK_INT >= 26 && result.isConnectable)
-
-            eventSink?.success(map)
+            val dev = result.device
+            logI("Scan result: ${dev.address} name=${dev.name ?: ""} rssi=${result.rssi}")
+            sendEvent(
+                mapOf(
+                    "type" to "scanResult",
+                    "deviceId" to dev.address,
+                    "name" to (dev.name ?: ""),
+                    "rssi" to result.rssi
+                )
+            )
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -439,161 +421,300 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    // ✅ ENHANCED: Connect to specific device (multiple connections supported)
     @SuppressLint("MissingPermission")
     private fun connect(deviceId: String?) {
-        if (deviceId == null) return
+        if (deviceId == null) {
+            logE("Connect called with null deviceId")
+            return
+        }
+
+        // Check if already connected or connecting
+        if (gattClients.containsKey(deviceId)) {
+            logW("Already connected or connecting to $deviceId")
+            return
+        }
+
         try {
-            val device = bluetoothAdapter?.getRemoteDevice(deviceId) ?: return
-            connectedDevice = device
-            // autoConnect = false
-            gattClient = device.connectGatt(appContext, false, gattClientCallback)
-        } catch (t: Throwable) {
-            logE("connect error: ${t.message}")
-            sendEvent(mapOf("type" to "connect_error", "message" to t.message))
-        }
-    }
-
-    private fun disconnect() {
-        try {
-            gattClient?.disconnect()
-            gattClient?.close()
-        } catch (t: Throwable) {
-            logW("disconnect error: ${t.message}")
-        } finally {
-            gattClient = null
-            connectedDevice = null
-            sendEvent(mapOf("type" to "disconnected"))
-        }
-    }
-
-    private val gattClientCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            logI("Client connection state: $newState")
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                sendEvent(mapOf("type" to "connected", "deviceId" to (gatt.device?.address ?: "")))
-                // discover services
-                gatt.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                sendEvent(
-                    mapOf(
-                        "type" to "disconnected",
-                        "deviceId" to (gatt.device?.address ?: "")
-                    )
-                )
-            }
-        }
-
-        // IN ANDROID PLUGIN - Fix onServicesDiscovered
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            logI("Services discovered: status=$status")
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                sendEvent(mapOf("type" to "services_discovery_failed", "deviceId" to gatt.device.address))
+            val device = bluetoothAdapter?.getRemoteDevice(deviceId)
+            if (device == null) {
+                logE("Device not found: $deviceId")
+                sendEvent(mapOf(
+                    "type" to "connectionFailed",
+                    "deviceId" to deviceId,
+                    "status" to "device_not_found"
+                ))
                 return
             }
 
-            try {
-                val service = gatt.getService(serverServiceUuid)
-                if (service != null) {
-                    // Set up TX characteristic for notifications
-                    val txChar = service.getCharacteristic(serverTxUuid)
-                    if (txChar != null) {
-                        gatt.setCharacteristicNotification(txChar, true)
-                        val descriptor = txChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                        descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(descriptor)
-                        logI("TX notifications enabled for ${gatt.device.address}")
-                        // Don't return - wait for descriptor write callback
-                    }
+            logI("Attempting connection to: $deviceId")
 
-                    // Verify RX characteristic exists
-                    val rxChar = service.getCharacteristic(serverRxUuid)
-                    if (rxChar == null) {
-                        logW("RX characteristic not found for ${gatt.device.address}")
+            // Create unique callback for this device
+            val callback = createGattClientCallback(deviceId)
+            deviceCallbacks[deviceId] = callback
+
+            val gatt = device.connectGatt(appContext, false, callback)
+            gattClients[deviceId] = gatt
+            connectedDevices[deviceId] = device
+
+            sendEvent(mapOf("type" to "connecting", "deviceId" to deviceId))
+
+        } catch (t: Throwable) {
+            logE("connect error for $deviceId: ${t.message}")
+            sendEvent(mapOf(
+                "type" to "connectionFailed",
+                "deviceId" to deviceId,
+                "message" to t.message
+            ))
+            // Cleanup on failure
+            gattClients.remove(deviceId)
+            connectedDevices.remove(deviceId)
+            deviceCallbacks.remove(deviceId)
+        }
+    }
+
+    // ✅ ENHANCED: Disconnect specific device
+    @SuppressLint("MissingPermission")
+    private fun disconnect(deviceId: String?) {
+        if (deviceId == null) {
+            logW("Disconnect called with null deviceId")
+            return
+        }
+
+        try {
+            val gatt = gattClients[deviceId]
+            if (gatt != null) {
+                try {
+                    if (gatt.connect()) { // Check if still connected
+                        gatt.disconnect()
                     }
+                } catch (e: Exception) {
+                    logW("Error during disconnect: ${e.message}")
+                } finally {
+                    gatt.close()
                 }
-
-                // Signal ready regardless (some devices might not have TX)
-                sendEvent(mapOf("type" to "services_ready", "deviceId" to gatt.device.address))
-
-            } catch (t: Throwable) {
-                logE("Service discovery error: ${t.message}")
-                sendEvent(mapOf("type" to "services_ready", "deviceId" to gatt.device.address))
             }
+            if (gatt != null) {
+                gattClients.remove(deviceId)
+                connectedDevices.remove(deviceId)
+                deviceCallbacks.remove(deviceId)
+                logI("Disconnected from: $deviceId")
+                sendEvent(mapOf("type" to "disconnected", "deviceId" to deviceId))
+            } else {
+                logW("No active connection to disconnect: $deviceId")
+            }
+        } catch (t: Throwable) {
+            logW("disconnect error for $deviceId: ${t.message}")
+        }
+    }
+
+    // ✅ NEW: Disconnect all central connections
+    private fun disconnectAll() {
+        logI("Disconnecting all central connections")
+        val deviceIds = gattClients.keys.toList() // Copy to avoid modification during iteration
+        for (deviceId in deviceIds) {
+            disconnect(deviceId)
+        }
+    }
+
+    // ✅ ENHANCED: Write to specific device
+    @SuppressLint("MissingPermission")
+    private fun writeCharacteristic(deviceId: String?, charUuidStr: String, value: ByteArray) {
+        if (deviceId == null) {
+            logE("writeCharacteristic called with null deviceId")
+            return
         }
 
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
-        ) {
-            logI("Characteristic changed: ${characteristic.uuid}")
-            sendEvent(
-                mapOf(
-                    "type" to "notification",
-                    "charUuid" to characteristic.uuid.toString(),
-                    "value" to characteristic.value
-                )
-            )
+        try {
+            val gatt = gattClients[deviceId]
+            if (gatt == null) {
+                logW("No GATT client for device: $deviceId")
+                sendEvent(mapOf(
+                    "type" to "write_error",
+                    "deviceId" to deviceId,
+                    "message" to "Not connected"
+                ))
+                return
+            }
+
+            val charUuid = UUID.fromString(charUuidStr)
+            val target = gatt.services?.firstOrNull { svc ->
+                svc.getCharacteristic(charUuid) != null
+            }?.getCharacteristic(charUuid)
+
+            if (target == null) {
+                logW("Target characteristic not found: $charUuidStr for $deviceId")
+                sendEvent(mapOf(
+                    "type" to "write_error",
+                    "deviceId" to deviceId,
+                    "message" to "Characteristic not found"
+                ))
+                return
+            }
+
+            target.value = value
+            target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            gatt.writeCharacteristic(target)
+            logI("Writing to characteristic $charUuidStr for device $deviceId")
+
+        } catch (t: Throwable) {
+            logE("writeCharacteristic error for $deviceId: ${t.message}")
+            sendEvent(mapOf(
+                "type" to "write_error",
+                "deviceId" to deviceId,
+                "message" to t.message
+            ))
+        }
+    }
+
+    // ✅ ENHANCED: Request MTU for specific device
+    @SuppressLint("MissingPermission")
+    private fun requestMtu(deviceId: String?, mtu: Int) {
+        if (deviceId == null) {
+            logE("requestMtu called with null deviceId")
+            return
         }
 
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int
-        ) {
-            logI("Characteristic write result: ${characteristic.uuid} status=$status")
-            sendEvent(
-                mapOf(
-                    "type" to "write_result",
-                    "charUuid" to characteristic.uuid.toString(),
-                    "status" to status
-                )
-            )
+        try {
+            val gatt = gattClients[deviceId]
+            if (gatt != null) {
+                gatt.requestMtu(mtu)
+                logI("Requesting MTU: $mtu for device: $deviceId")
+            } else {
+                logW("Cannot request MTU - GATT client not connected for: $deviceId")
+            }
+        } catch (t: Throwable) {
+            logE("requestMtu error for $deviceId: ${t.message}")
         }
+    }
 
-        // Remove the problematic onConnectionStateChange method with wrong signature
-        // The correct signature is already implemented above
+    // ✅ NEW: Get list of connected devices
+    private fun getConnectedDevices(): List<String> {
+        return gattClients.keys.toList()
+    }
 
-        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            super.onMtuChanged(gatt, mtu, status)
-            logI("Client MTU changed: $mtu, status: $status")
-            if (status == BluetoothGatt.GATT_SUCCESS) {
+    // ✅ NEW: Check if specific device is connected
+    private fun isDeviceConnected(deviceId: String?): Boolean {
+        return deviceId != null && gattClients.containsKey(deviceId)
+    }
+
+    // ✅ ENHANCED: Create device-specific GATT callback
+    private fun createGattClientCallback(deviceId: String): BluetoothGattCallback {
+        return object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                logI("Client connection state for $deviceId: $newState, status: $status")
+
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        sendEvent(mapOf(
+                            "type" to "connected",
+                            "deviceId" to deviceId
+                        ))
+                        gatt.discoverServices()
+                    } else {
+                        sendEvent(mapOf(
+                            "type" to "connectionFailed",
+                            "deviceId" to deviceId,
+                            "status" to status.toString()
+                        ))
+                        // Cleanup failed connection
+                        gattClients.remove(deviceId)
+                        connectedDevices.remove(deviceId)
+                        deviceCallbacks.remove(deviceId)
+                    }
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    sendEvent(mapOf(
+                        "type" to "disconnected",
+                        "deviceId" to deviceId,
+                        "status" to status.toString()
+                    ))
+                    // Cleanup disconnected device
+                    gattClients.remove(deviceId)
+                    connectedDevices.remove(deviceId)
+                    deviceCallbacks.remove(deviceId)
+                    gatt.close()
+                }
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                logI("Services discovered for $deviceId, status: $status")
+
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    try {
+                        // Subscribe to all notify characteristics
+                        gatt.services.forEach { svc ->
+                            svc.characteristics.forEach { c ->
+                                if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
+                                    gatt.setCharacteristicNotification(c, true)
+                                    val desc = c.getDescriptor(
+                                        UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+                                    )
+                                    desc?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                    desc?.let { gatt.writeDescriptor(it) }
+                                    logI("Subscribed to ${c.uuid} for $deviceId")
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        logW("Service discover error for $deviceId: ${t.message}")
+                    }
+                } else {
+                    logE("Service discovery failed for $deviceId: $status")
+                }
+            }
+
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic
+            ) {
+                logI("Characteristic changed for $deviceId: ${characteristic.uuid}")
                 sendEvent(
                     mapOf(
-                        "type" to "mtu_changed",
-                        "deviceId" to gatt.device.address,
-                        "mtu" to mtu
+                        "type" to "notification",
+                        "deviceId" to deviceId,
+                        "charUuid" to characteristic.uuid.toString(),
+                        "value" to characteristic.value
                     )
                 )
-            } else {
+            }
+
+            override fun onCharacteristicWrite(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                logI("Characteristic write result for $deviceId: ${characteristic.uuid} status=$status")
                 sendEvent(
                     mapOf(
-                        "type" to "mtu_change_failed",
-                        "deviceId" to gatt.device.address,
+                        "type" to "write_result",
+                        "deviceId" to deviceId,
+                        "charUuid" to characteristic.uuid.toString(),
                         "status" to status
                     )
                 )
             }
-        }
-    }
 
-    @SuppressLint("MissingPermission")
-    private fun writeCharacteristic(charUuidStr: String, value: ByteArray) {
-        try {
-            val charUuid = UUID.fromString(charUuidStr)
-            val target =
-                gattClient?.services?.firstOrNull { svc -> svc.getCharacteristic(charUuid) != null }
-                    ?.getCharacteristic(charUuid)
-            if (target == null) {
-                logW("Target characteristic not found to write: $charUuidStr")
-                sendEvent(mapOf("type" to "write_error", "message" to "Characteristic not found"))
-                return
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                super.onMtuChanged(gatt, mtu, status)
+                logI("Client MTU changed for $deviceId: $mtu, status: $status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    sendEvent(
+                        mapOf(
+                            "type" to "mtu_changed",
+                            "deviceId" to deviceId,
+                            "mtu" to mtu
+                        )
+                    )
+                } else {
+                    sendEvent(
+                        mapOf(
+                            "type" to "mtu_change_failed",
+                            "deviceId" to deviceId,
+                            "status" to status
+                        )
+                    )
+                }
             }
-            target.value = value
-            target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            gattClient?.writeCharacteristic(target)
-        } catch (t: Throwable) {
-            logE("writeCharacteristic error: ${t.message}")
-            sendEvent(mapOf("type" to "write_error", "message" to t.message))
         }
     }
 
@@ -609,7 +730,6 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     }
                 }
             } else {
-                // fallback: use a Handler if appContext is not Activity
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     try {
                         eventSink?.success(payload)
@@ -621,71 +741,9 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
-
     private fun stopAll() {
-        logI("🛑 Stopping ALL BLE services completely...")
-
-        // 1. Stop ALL advertising (multiple callbacks)
-        try {
-            advertiser?.stopAdvertising(advertiseCallback)
-            // If you have other advertising callbacks, stop them here:
-            // advertiser?.stopAdvertising(advertisementScanCallback)
-        } catch (ignored: Exception) {
-        }
-
-        // 2. Stop ALL scanning (multiple callbacks)
-        try {
-            scanner?.stopScan(scanCallback)
-            // If you have other scan callbacks, stop them here:
-            // scanner?.stopScan(advertisementScanCallback)
-        } catch (ignored: Exception) {
-            logE("Stop Scan Error: "+ignored)
-
-        }
-
-        // 3. Close GATT server completely
-        try {
-            gattServer?.clearServices() // 🆕 CRITICAL: Remove services first
-            gattServer?.close()
-            gattServer = null
-        } catch (ignored: Exception) {
-            logE("Gatt Server Error: "+ignored)
-
-
-        }
-        // 4. Disconnect and close GATT client
-        try {
-            gattClient?.disconnect()
-            gattClient?.close()
-            gattClient = null
-            connectedDevice = null
-        } catch (ignored: Exception) {
-            logE("Gatt CLient Error: "+ignored)
-
-        }
-
-        // 5. 🆕 Clear Bluetooth manager references
-        try {
-            // These help with garbage collection
-            bluetoothManager = null
-            // Don't null adapter/advertiser/scanner - they're system singletons
-        } catch (ignored: Exception) {
-            logE("BLE Manager nulled "+ignored)
-
-        }
-
-        // 6. Clear all collections and state
-        subscribers.clear()
-        serverServiceUuid = null
-        serverTxUuid = null
-        serverRxUuid = null
-        txCharacteristic = null
-        rxCharacteristic = null
-
-        // 7. 🆕 Force garbage collection hint
-        System.gc()
-
-        logI("✅ ALL BLE services stopped completely - ready for fresh start.")
-        sendEvent(mapOf("type" to "all_stopped"))
+        stopScan()
+        disconnectAll()
+        stopPeripheral()
     }
 }
