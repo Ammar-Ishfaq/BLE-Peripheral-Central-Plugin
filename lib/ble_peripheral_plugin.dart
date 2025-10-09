@@ -1,123 +1,37 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
-class BlePeripheralPlugin {
-  static const MethodChannel _methodChannel =
-  MethodChannel('ble_peripheral_plugin/methods');
-  static const EventChannel _eventChannel =
-  EventChannel('ble_peripheral_plugin/events');
+/// BitChat-style BLE broadcast plugin
+/// – No GATT connections
+/// – Pure advertising + scanning
+/// – Short broadcast packets (≤31 bytes)
+class BleBroadcastPlugin {
+  static const MethodChannel _m = MethodChannel('ble_broadcast/methods');
+  static const EventChannel _e = EventChannel('ble_broadcast/events');
+  static Stream<Map<String, dynamic>>? _stream;
 
-  static Stream<Map<String, dynamic>>? _eventStream;
-  static const int MAX_MTU = 512;
+  static Stream<Map<String, dynamic>> get events =>
+      _stream ??= _e.receiveBroadcastStream()
+          .map((e) => Map<String, dynamic>.from(e));
 
-  // ---------------- Enhanced Peripheral Methods (Unchanged) ----------------
+  /// Start continuous advertising of [payload] (<=31 bytes)
+  static Future<void> startAdvertising(Uint8List payload) async =>
+      _m.invokeMethod('startAdvertising', {'payload': payload});
 
-  /// Start peripheral mode with service/characteristic UUIDs
-  static Future<void> startPeripheral(
-      String serviceUuid, String txUuid, String rxUuid) async {
-    await _methodChannel.invokeMethod('startPeripheral', {
-      'serviceUuid': serviceUuid,
-      'txUuid': txUuid,
-      'rxUuid': rxUuid,
-    });
-  }
+  static Future<void> stopAdvertising() async =>
+      _m.invokeMethod('stopAdvertising');
 
-  static Future<void> stopPeripheral() async {
-    await _methodChannel.invokeMethod('stopPeripheral');
-  }
+  /// Start continuous scanning
+  static Future<void> startScanning() async =>
+      _m.invokeMethod('startScanning');
 
-  /// Send notification (Peripheral → Central)
-  static Future<void> sendNotification(String charUuid, Uint8List value) async {
-    await _methodChannel.invokeMethod('sendNotification', {
-      'charUuid': charUuid,
-      'value': value,
-    });
-  }
+  static Future<void> stopScanning() async =>
+      _m.invokeMethod('stopScanning');
 
-  // ---------------- Enhanced Central Methods with Multi-Connection Support ----------------
+  /// Check BLE state
+  static Future<bool> isBluetoothOn() async =>
+      (await _m.invokeMethod<bool>('isBluetoothOn')) ?? false;
 
-  /// Start scanning for BLE devices
-  static Future<void> startScan(String serviceUuid) async {
-    await _methodChannel.invokeMethod('startScan', {'serviceUuid': serviceUuid});
-  }
-
-  static Future<void> stopScan() async {
-    await _methodChannel.invokeMethod('stopScan');
-  }
-
-  /// ✅ UPDATED: Connect to a specific device (adds to multiple connections)
-  static Future<void> connect(String deviceId) async {
-    await _methodChannel.invokeMethod('connect',{"deviceId":deviceId});
-  }
-
-  /// ✅ NEW: Disconnect a specific device
-  static Future<void> disconnect(String deviceId) async {
-    await _methodChannel.invokeMethod('disconnect',{"deviceId":deviceId});
-  }
-
-  /// ✅ NEW: Disconnect all central connections
-  static Future<void> disconnectAll() async {
-    await _methodChannel.invokeMethod('disconnectAll');
-  }
-
-  /// ✅ UPDATED: Write to a specific device's characteristic
-  static Future<void> writeCharacteristic(
-      String deviceId, String charUuid, Uint8List value) async {
-    await _methodChannel.invokeMethod('writeCharacteristic', {
-      'deviceId': deviceId,
-      'charUuid': charUuid,
-      'value': value,
-    });
-  }
-
-  /// ✅ UPDATED: Request MTU for a specific device
-  static Future<void> requestMtu(String deviceId, [int mtu = MAX_MTU]) async {
-    await _methodChannel.invokeMethod('requestMtu', {
-      'deviceId': deviceId,
-      'mtu': mtu,
-    });
-  }
-
-  // ---------------- Enhanced Connection Management ----------------
-
-  /// ✅ NEW: Get list of all connected device IDs
-  static Future<List<String>> getConnectedDevices() async {
-    final result = await _methodChannel.invokeMethod<List<dynamic>>('getConnectedDevices');
-    return result?.map((id) => id.toString()).toList() ?? [];
-  }
-
-  /// ✅ NEW: Check if a specific device is connected
-  static Future<bool> isDeviceConnected(String deviceId) async {
-    final result = await _methodChannel.invokeMethod<bool>(
-        'isDeviceConnected',
-        {'deviceId': deviceId}
-    );
-    return result ?? false;
-  }
-
-  // ---------------- Events & Utilities ----------------
-
-  /// Event stream for BLE notifications and state changes
-  static Stream<Map<String, dynamic>> get events {
-    _eventStream ??= _eventChannel
-        .receiveBroadcastStream()
-        .map((event) => Map<String, dynamic>.from(event));
-    return _eventStream!;
-  }
-
-  static Future<void> enableLogs(bool enable) async {
-    await _methodChannel.invokeMethod('enableLogs', {'enable': enable});
-  }
-
-  /// Check if Bluetooth is ON (iOS + Android)
-  static Future<bool> isBluetoothOn() async {
-    final result = await _methodChannel.invokeMethod<bool>('isBluetoothOn');
-    return result ?? false;
-  }
-
-  /// Stop all BLE operations (peripheral + central)
-  static Future<void> stopAll() async {
-    await _methodChannel.invokeMethod('stopAll');
-  }
+  static Future<void> enableLogs(bool enable) async =>
+      _m.invokeMethod('enableLogs', {'enable': enable});
 }

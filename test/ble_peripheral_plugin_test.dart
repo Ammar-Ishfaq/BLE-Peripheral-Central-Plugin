@@ -20,10 +20,10 @@ void main() {
   });
 
   test('getPlatformVersion', () async {
-    BlePeripheralPlugin blePeripheralPlugin = BlePeripheralPlugin();
+    BleBroadcastPlugin BleBroadcastPlugin = BleBroadcastPlugin();
     MockBlePeripheralPluginPlatform fakePlatform = MockBlePeripheralPluginPlatform();
     BlePeripheralPluginPlatform.instance = fakePlatform;
 
-    expect(await blePeripheralPlugin.getPlatformVersion(), '42');
+    expect(await BleBroadcastPlugin.getPlatformVersion(), '42');
   });
 }

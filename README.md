@@ -68,7 +68,7 @@ import 'package:ble_peripheral_plugin/ble_peripheral_plugin.dart';
 ### Start advertising & scanning
 
 ```dart
-await BlePeripheralPlugin.start();
+await BleBroadcastPlugin.start();
 ```
 
 > `start()` will initialize the plugin and begin advertising (peripheral) and scanning (central) according to the default configuration or configuration you pass (see API).
@@ -76,14 +76,14 @@ await BlePeripheralPlugin.start();
 ### Send data
 
 ```dart
-await BlePeripheralPlugin.sendData("Hello BLE");
+await BleBroadcastPlugin.sendData("Hello BLE");
 ```
 
 
 ### Listen for BLE lifecycle & status events
 
 ```dart
-BlePeripheralPlugin.events.listen(_handleBleEvent);
+BleBroadcastPlugin.events.listen(_handleBleEvent);
 
 void _handleBleEvent(BleEvent event) {
   print('🔔 Event: ${event.type} | ${event.message}');
@@ -96,10 +96,10 @@ The event stream provides updates on connection state, errors, advertising statu
 
 ```dart
 // Start BLE (advertising + scanning)
-await BlePeripheralPlugin.start();
+await BleBroadcastPlugin.start();
 
 // Listen for messages
-BlePeripheralPlugin.events.listen((event) {
+BleBroadcastPlugin.events.listen((event) {
   if (event['type'] == 'rx' || event['type'] == 'notification') {
     final value = event['value'] as Uint8List;
     print("📩 Received: ${String.fromCharCodes(value)}");
@@ -107,7 +107,7 @@ BlePeripheralPlugin.events.listen((event) {
 });
 
 // Send a message
-await BlePeripheralPlugin.sendData("Hello from Flutter 🚀");
+await BleBroadcastPlugin.sendData("Hello from Flutter 🚀");
 ```
 
 ### Advanced event handling
@@ -127,11 +127,11 @@ void _handleBleEvent(Map<String, dynamic> event) async {
 
     case "scanResult":
         // Only connect you found
-        await BlePeripheralPlugin.connect(deviceId);
+        await BleBroadcastPlugin.connect(deviceId);
       break;
 
     case "connected":
-      BlePeripheralPlugin.requestMtu(512);
+      BleBroadcastPlugin.requestMtu(512);
       break;
 
     case "disconnected":
@@ -154,7 +154,7 @@ This allows you to react to connection changes, process messages, and automatica
 ### Stop all BLE activity
 
 ```dart
-await BlePeripheralPlugin.stop();
+await BleBroadcastPlugin.stop();
 ```
 
 ---
@@ -163,10 +163,10 @@ await BlePeripheralPlugin.stop();
 
 > This README lists the most commonly used top-level calls and streams. For full API details see the plugin's dart docs and example app.
 
-* `BlePeripheralPlugin.start()` — Initialize the plugin and start advertising/scanning.
-* `BlePeripheralPlugin.stop()` — Stop advertising, scanning and disconnect any connections.
-* `BlePeripheralPlugin.sendData(String data)` — Send UTF-8 text data to connected device(s).
-* `BlePeripheralPlugin.events` — `Stream<BleEvent>` that emits status and lifecycle events (advertising started, connection lost, error, etc.).
+* `BleBroadcastPlugin.start()` — Initialize the plugin and start advertising/scanning.
+* `BleBroadcastPlugin.stop()` — Stop advertising, scanning and disconnect any connections.
+* `BleBroadcastPlugin.sendData(String data)` — Send UTF-8 text data to connected device(s).
+* `BleBroadcastPlugin.events` — `Stream<BleEvent>` that emits status and lifecycle events (advertising started, connection lost, error, etc.).
 
 > Note: If you require binary payloads or larger messages, consider splitting them and implementing a framing protocol in your app code.
 

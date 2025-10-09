@@ -16,7 +16,7 @@ import org.mockito.Mockito
 internal class BlePeripheralPluginTest {
   @Test
   fun onMethodCall_getPlatformVersion_returnsExpectedValue() {
-    val plugin = BlePeripheralPlugin()
+    val plugin = BleBroadcastPlugin()
 
     val call = MethodCall("getPlatformVersion", null)
     val mockResult: MethodChannel.Result = Mockito.mock(MethodChannel.Result::class.java)

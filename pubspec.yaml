@@ -36,9 +36,9 @@ flutter:
     platforms:
       android:
         package: com.ammar.ble.ble_peripheral_plugin
-        pluginClass: BlePeripheralPlugin
+        pluginClass: BleBroadcastPlugin
       ios:
-        pluginClass: BlePeripheralPlugin
+        pluginClass: BleBroadcastPlugin
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:
