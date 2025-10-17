@@ -384,6 +384,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
+            if(scanner==null) scanner= bluetoothAdapter?.bluetoothLeScanner
             scanner?.startScan(listOf(filter), settings, scanCallback)
             sendEvent(mapOf("type" to "scan_started"))
         } catch (t: Throwable) {
