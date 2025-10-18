@@ -180,10 +180,12 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     val isOn = bluetoothAdapter?.isEnabled ?: false
                     result.success(isOn)
                 }
+
                 "stopAll" -> {
                     stopAll()
                     result.success(null)
                 }
+
                 else -> result.notImplemented()
             }
         } catch (t: Throwable) {
@@ -191,9 +193,22 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    private fun validateInitialization() {
+        if (bluetoothManager == null)
+            bluetoothManager =
+                appContext?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        if (bluetoothAdapter == null)
+            bluetoothAdapter = bluetoothManager?.adapter
+        if (advertiser == null)
+            advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+        if (scanner == null)
+            scanner = bluetoothAdapter?.bluetoothLeScanner
+    }
+
     // ---------- Peripheral (GATT Server + Advertiser) ----------
     // (Unchanged from original)
     private fun startPeripheral(serviceUuidStr: String, txUuidStr: String, rxUuidStr: String) {
+        validateInitialization();
         stopPeripheral()
         serverServiceUuid = UUID.fromString(serviceUuidStr)
         serverTxUuid = UUID.fromString(txUuidStr)
@@ -205,7 +220,8 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             return
         }
 
-        val service = BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service =
+            BluetoothGattService(serverServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         txCharacteristic = BluetoothGattCharacteristic(
             serverTxUuid,
@@ -384,7 +400,7 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
-            if(scanner==null) scanner= bluetoothAdapter?.bluetoothLeScanner
+            if (scanner == null) scanner = bluetoothAdapter?.bluetoothLeScanner
             scanner?.startScan(listOf(filter), settings, scanCallback)
             sendEvent(mapOf("type" to "scan_started"))
         } catch (t: Throwable) {
@@ -440,11 +456,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             val device = bluetoothAdapter?.getRemoteDevice(deviceId)
             if (device == null) {
                 logE("Device not found: $deviceId")
-                sendEvent(mapOf(
-                    "type" to "connectionFailed",
-                    "deviceId" to deviceId,
-                    "status" to "device_not_found"
-                ))
+                sendEvent(
+                    mapOf(
+                        "type" to "connectionFailed",
+                        "deviceId" to deviceId,
+                        "status" to "device_not_found"
+                    )
+                )
                 return
             }
 
@@ -462,11 +480,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         } catch (t: Throwable) {
             logE("connect error for $deviceId: ${t.message}")
-            sendEvent(mapOf(
-                "type" to "connectionFailed",
-                "deviceId" to deviceId,
-                "message" to t.message
-            ))
+            sendEvent(
+                mapOf(
+                    "type" to "connectionFailed",
+                    "deviceId" to deviceId,
+                    "message" to t.message
+                )
+            )
             // Cleanup on failure
             gattClients.remove(deviceId)
             connectedDevices.remove(deviceId)
@@ -530,11 +550,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             val gatt = gattClients[deviceId]
             if (gatt == null) {
                 logW("No GATT client for device: $deviceId")
-                sendEvent(mapOf(
-                    "type" to "write_error",
-                    "deviceId" to deviceId,
-                    "message" to "Not connected"
-                ))
+                sendEvent(
+                    mapOf(
+                        "type" to "write_error",
+                        "deviceId" to deviceId,
+                        "message" to "Not connected"
+                    )
+                )
                 return
             }
 
@@ -545,11 +567,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
             if (target == null) {
                 logW("Target characteristic not found: $charUuidStr for $deviceId")
-                sendEvent(mapOf(
-                    "type" to "write_error",
-                    "deviceId" to deviceId,
-                    "message" to "Characteristic not found"
-                ))
+                sendEvent(
+                    mapOf(
+                        "type" to "write_error",
+                        "deviceId" to deviceId,
+                        "message" to "Characteristic not found"
+                    )
+                )
                 return
             }
 
@@ -560,11 +584,13 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         } catch (t: Throwable) {
             logE("writeCharacteristic error for $deviceId: ${t.message}")
-            sendEvent(mapOf(
-                "type" to "write_error",
-                "deviceId" to deviceId,
-                "message" to t.message
-            ))
+            sendEvent(
+                mapOf(
+                    "type" to "write_error",
+                    "deviceId" to deviceId,
+                    "message" to t.message
+                )
+            )
         }
     }
 
@@ -607,28 +633,34 @@ class BlePeripheralPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
-                        sendEvent(mapOf(
-                            "type" to "connected",
-                            "deviceId" to deviceId
-                        ))
+                        sendEvent(
+                            mapOf(
+                                "type" to "connected",
+                                "deviceId" to deviceId
+                            )
+                        )
                         gatt.discoverServices()
                     } else {
-                        sendEvent(mapOf(
-                            "type" to "connectionFailed",
-                            "deviceId" to deviceId,
-                            "status" to status.toString()
-                        ))
+                        sendEvent(
+                            mapOf(
+                                "type" to "connectionFailed",
+                                "deviceId" to deviceId,
+                                "status" to status.toString()
+                            )
+                        )
                         // Cleanup failed connection
                         gattClients.remove(deviceId)
                         connectedDevices.remove(deviceId)
                         deviceCallbacks.remove(deviceId)
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    sendEvent(mapOf(
-                        "type" to "disconnected",
-                        "deviceId" to deviceId,
-                        "status" to status.toString()
-                    ))
+                    sendEvent(
+                        mapOf(
+                            "type" to "disconnected",
+                            "deviceId" to deviceId,
+                            "status" to status.toString()
+                        )
+                    )
                     // Cleanup disconnected device
                     gattClients.remove(deviceId)
                     connectedDevices.remove(deviceId)
