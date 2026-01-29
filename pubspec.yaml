@@ -1,7 +1,9 @@
 name: ble_peripheral_plugin
-description: "A new Flutter plugin project."
+description: A Flutter plugin that provides Bluetooth Low Energy (BLE) Peripheral and Central functionality for advertising services and scanning/connecting to nearby devices.
 version: 0.0.1
-homepage:
+homepage: https://github.com/Ammar-Ishfaq/BLE-Peripheral-Central-Plugin
+repository: https://github.com/Ammar-Ishfaq/BLE-Peripheral-Central-Plugin
+issue_tracker: https://github.com/Ammar-Ishfaq/BLE-Peripheral-Central-Plugin/issues
 
 environment:
   sdk: ^3.7.2
